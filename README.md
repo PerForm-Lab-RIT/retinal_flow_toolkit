@@ -1,4 +1,4 @@
-# Optic_Flow_1
+# Retinal flow toolkit
 
 A simple optical flow calculation script.
 
