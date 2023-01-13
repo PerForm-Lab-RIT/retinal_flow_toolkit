@@ -48,11 +48,12 @@ HSV color representations of flow are best if scaled to a range defined by a rea
 ## Dependencies
 
 
-numpy
-av for movie makin'
-logging
-pickle
-tqdm for the nifty progress bar that shows up in your console.
+* numpy
+* av for movie makin'
+* logging
+* pickle
+* tqdm for the nifty progress bar that shows up in your console.
+* matplotlib
 
 ![image](https://user-images.githubusercontent.com/8962011/212423219-734e351a-0139-4596-ac8b-8d5bc28c7316.png)
 
