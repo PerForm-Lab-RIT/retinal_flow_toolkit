@@ -37,7 +37,7 @@ I encourage the user to look at <flow_source>.create_flow_object() to see the di
 
 ![image](https://user-images.githubusercontent.com/8962011/212419849-328487d7-694f-458c-bf71-82fd5aa83851.png)
 
-## Settings the upper_mag_threshold
+## Setting the upper_mag_threshold
 
 Output will be placed in /flow_out/<movie_name>.
 HSV color representations of flow are best if scaled to a range defined by a reasonable maximum value. For that reason, after processing with upper_mag_threshold = False,
