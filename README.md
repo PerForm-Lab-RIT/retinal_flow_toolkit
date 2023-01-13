@@ -1,6 +1,8 @@
 # Retinal flow toolkit
 
-A simple optical flow calculation script.
+A simple module for the calculation of optic flow.  
+
+The most relevant file is flow_source.py, in which lives the flow_source class for converting a video into optic flow.  You also have the option of saving out intermediate frames of image data.
 
 It will take advantage of CUDA if enabled for opencv. 
 
@@ -17,7 +19,7 @@ source.calculate_flow(algorithm='tvl1', visualize_as="hsv_stacked", lower_mag_th
 If you don't have cuda enabled for opencv, set <flow_source>.cuda_enabled = False
 I encourage the user to look at <flow_source>.create_flow_object() to see the different algorithms that are enabled, and to see the parameters for existing flow algorithms.
 
-Options for "visualize_as" include:
+## Options for "visualize_as" include:
 
 "hsv_stacked"
 
@@ -35,7 +37,13 @@ Options for "visualize_as" include:
 
 ![image](https://user-images.githubusercontent.com/8962011/212419849-328487d7-694f-458c-bf71-82fd5aa83851.png)
 
+## Settings the upper_mag_threshold
 
 Output will be placed in /flow_out/<movie_name>.
 HSV color representations of flow are best if scaled to a range defined by a reasonable maximum value. For that reason, after processing with upper_mag_threshold = False,
-/flow_out/<movie_name>/magnitude_data will contain images of your 
+/flow_out/<movie_name>/magnitude_data will contain images of the cumulative distribution function of magnitude of flow vector length.  Set your threshold somewhere around where the CDF reaches 1. This will vary for algorithm and by the motion statistics of the environment / task / stimulus class (?) represented in your video.
+
+![image](https://user-images.githubusercontent.com/8962011/212422892-a28d9352-9b66-471e-a26f-13cd9f050c49.png)
+
+
+
