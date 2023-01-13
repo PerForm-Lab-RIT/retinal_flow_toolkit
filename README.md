@@ -60,8 +60,9 @@ HSV color representations of flow are best if scaled to a range defined by a rea
 
 ## Dependencies
 
-Tested with py3.8 and opencv 4.6 compiled with CUDA.\n
-Dependencies include...\n
+Tested with py3.8 and opencv 4.6 compiled with CUDA.
+
+Dependencies include...
 
 * numpy
 * av for movie makin'
