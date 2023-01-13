@@ -17,7 +17,20 @@ source.calculate_flow(algorithm='tvl1', visualize_as="hsv_stacked", lower_mag_th
 ```
 
 If you don't have cuda enabled for opencv, set <flow_source>.cuda_enabled = False
-I encourage the user to look at <flow_source>.create_flow_object() to see the different algorithms that are enabled, and to see the parameters for existing flow algorithms.
+
+## Flow algorithms and settings.
+
+Nothing elegant here - you'll have to go into the code for more info. I encourage the user to look at <flow_source>.create_flow_object() to see the different algorithms that are enabled, and to see the parameters for existing flow algorithms.  I have not made all parameters for all algorithms visible.  Use the opencv docs to play around.
+
+At the time of writing this, I have implemented...
+* deepflow
+* farneback
+* brox with cuda support
+* tvl1 with cuda support
+* pyrLK with cuda support
+
+I've had the best quality output with tvl1. \n
+I tried to implement cuda_NvidiaOpticalFlow_2_0, but ran into indecipherable errors.  So, it lingers, half impelemented.
 
 ## Options for "visualize_as" include:
 
@@ -47,6 +60,8 @@ HSV color representations of flow are best if scaled to a range defined by a rea
 
 ## Dependencies
 
+Tested with py3.8 and opencv 4.6 compiled with CUDA.\n
+Dependencies include...\n
 
 * numpy
 * av for movie makin'
