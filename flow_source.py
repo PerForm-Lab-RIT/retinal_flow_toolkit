@@ -4,10 +4,13 @@ import os
 import sys
 import numpy as np
 import av
-
+import pyvista as pv
 import logging
 import pickle
 from tqdm import tqdm
+
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 
 os.add_dll_directory("D://opencvgpu//opencv_build_310//bin")
 os.add_dll_directory("C://Program Files//NVIDIA GPU Computing Toolkit//CUDA//v11.8//bin")
@@ -38,6 +41,8 @@ class flow_source():
         self.flow_frames_out_path = os.path.join(out_parent_dir, self.source_file_name, 'flow')
         self.video_out_path = os.path.join(out_parent_dir, self.source_file_name)
         self.magnitude_out_path = os.path.join(out_parent_dir, self.source_file_name, 'magnitude_data')
+
+        self.streamline_points = None
 
     def generate_mag_histogram(self, mag_image_fileloc, mag_values,bins):
 
@@ -106,11 +111,16 @@ class flow_source():
 
         return use_cuda, flow_algo
 
-    def convert_flow_to_frame(self, frame, magnitude, angle, visualize_as, upper_mag_threshold, mask = None, image_1_gray = None, vector_scalar = 1):
+    def convert_flow_to_frame(self, frame, flow, magnitude, angle, visualize_as, upper_mag_threshold, mask = None, image_1_gray = None, vector_scalar = 1):
 
-        if visualize_as == "vectors":
+        if visualize_as == "streamlines":
 
-            image_out = self.visualize_flow_as_vectors(frame, magnitude, angle, vector_scalar = vector_scalar)  # , magnitude_scalar=-1)
+            image_out = self.visualize_flow_as_streamlines(frame, flow)
+            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+
+        elif visualize_as == "vectors":
+
+            image_out = self.visualize_flow_as_vectors(frame, magnitude, angle, vector_scalar = vector_scalar)
             frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
 
         elif visualize_as == "hsv_overlay" or visualize_as == "hsv_stacked":
@@ -278,11 +288,18 @@ class flow_source():
             magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
 
             # Convert flow to visualization
-            image_out, frame_out = self.convert_flow_to_frame(frame, magnitude, angle, visualize_as, upper_mag_threshold, image_1_gray = image1_gray, vector_scalar = vector_scalar)
+            image_out, frame_out = self.convert_flow_to_frame(frame,
+                                                              flow,
+                                                              magnitude,
+                                                              angle,
+                                                              visualize_as,
+                                                              upper_mag_threshold,
+                                                              image_1_gray = image1_gray,
+                                                              vector_scalar = vector_scalar)
 
             if fps is False or fps is None:
+                
                 frame_out.time_base = raw_frame.time_base
-
                 # frame_out.pts = raw_frame.pts
                 # frame_out.dts = raw_frame.dts
                 # print(raw_frame.dts)
@@ -296,8 +313,10 @@ class flow_source():
 
             # Add packet to video
             for packet in stream.encode(frame_out):
-                packet.dts = raw_frame.dts
-                packet.pts = raw_frame.pts
+                if fps is False or fps is None:
+                    packet.time_base = raw_frame.time_base
+                    packet.dts = raw_frame.dts
+                    packet.pts = raw_frame.pts
                 container_out.mux(packet)
 
         # Flush stream
@@ -335,6 +354,80 @@ class flow_source():
 
         return magnitude
 
+    def visualize_flow_as_streamlines(self, frame, flow):
+
+        
+        # dbfile = open(os.path.join(self.video_out_path,"streamlines.pickle"), 'wb')
+        # pickle.dump({"frame": frame, "flow": flow},dbfile)
+        # dbfile.close()
+
+        w = int(np.shape(frame)[1])
+        h = int(np.shape(frame)[0])
+
+        x = np.arange(0, np.shape(frame)[0], 20)
+        y = np.arange(0, np.shape(frame)[1], 20)
+        xx, yy, zz = np.meshgrid(y, x, 0)
+
+        grid = pv.UniformGrid()
+        grid.dimensions = (w, h, 1)
+        grid.origin = (0, 0, 0)
+        grid.spacing = (1, 1, 1)
+        grid.show_scalar_bar = False
+
+        grid.texture_map_to_plane(inplace=True)
+        # tex = pv.numpy_to_texture(cv2.rotate(frame, cv2.ROTATE_180))
+        tex = pv.numpy_to_texture(frame)
+
+        flow3D = np.zeros([np.shape(flow)[0] * np.shape(flow)[1], 3], dtype=np.float32)
+        flow3D[:, 0] = -flow[..., 0].flatten()
+        flow3D[:, 1] = -flow[..., 1].flatten()
+
+        grid['vectors'] = flow3D
+        grid.set_active_vectors("vectors")
+
+        p = pv.Plotter(off_screen=True, window_size=[640, 480])
+        p.add_mesh(grid, texture=tex)
+
+        start_pts = np.array(
+            [[x, y, 0] for x in np.arange(0, np.shape(frame)[0], 20) for y in np.arange(0, np.shape(frame)[1], 20)])
+
+        try:
+
+            line_streamlines = grid.streamlines_evenly_spaced_2D(
+                start_position=(0, 0, 0),
+                step_length=10,
+                separating_distance=20,
+                separating_distance_ratio=0.7,
+                compute_vorticity=False,  # vorticity already exists in dataset
+                vectors="vectors",
+                #     progress_bar= True,
+            )
+        except:
+            print('B')
+            return frame
+
+        try:
+            p.add_mesh(line_streamlines.tube(radius=2), color='w')
+        except:
+            print('C')
+            return frame
+        
+        p.camera_position = 'xy'
+        p.view_xy()
+        p.camera.up = (0.0, 1.0, 0.0)
+        p.camera.zoom(1.7)
+        p.store_image=True
+        p.render()
+        p.show()
+        
+        im = p.image
+        p.close()
+
+    
+        return cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+
+
+
     def visualize_flow_as_hsv(self, magnitude, angle, upper_bound = False):
         '''
         Note that to perform well, this function really needs an upper_bound, which also acts as a normalizing term.
@@ -363,30 +456,6 @@ class flow_source():
 
         if vector_scalar != 1 & vector_scalar != False:
             magnitude = np.multiply(magnitude, vector_scalar)
-        #
-        # # create a blank mask, on which lines will be drawn.
-        # mask = np.zeros([np.shape(magnitude)[0], np.shape(magnitude)[1], 3], np.uint8)
-        #
-        # if vector_scalar != 1 & vector_scalar != False:
-        #     magnitude = np.multiply(magnitude, vector_scalar)
-        #
-        # divisor = 20
-        # arrow_spacing = int(np.shape(magnitude)[0] / divisor)
-        # arrow_x_locs = np.array(np.linspace(arrow_spacing / 2, np.shape(magnitude)[0] - arrow_spacing / 2.0,
-        #                                     int(np.shape(magnitude)[0] / divisor) - 1), dtype=np.int32)
-        # vector_x, vector_y = cv2.polarToCart(magnitude, angle)
-        #
-        # for r in arrow_x_locs:
-        #     for c in np.where(magnitude[r, :] > np.median(magnitude) * 1.5)[0]:
-        #         origin_x = c
-        #         origin_y = r
-        #
-        #         endpoint_x = int(origin_x + vector_x[origin_y, origin_x])
-        #         endpoint_y = int(origin_y + vector_y[origin_y, origin_x])
-        #
-        #         mask = cv2.arrowedLine(mask, (origin_x, origin_y), (endpoint_x, endpoint_y), color=(0, 0, 255),
-        #                                thickness=1, tipLength=0.35)
-        #
 
         vector_x, vector_y = cv2.polarToCart(magnitude, angle)
 
@@ -423,21 +492,23 @@ class flow_source():
         return magnitude
 
 if __name__ == "__main__":
-    a_file_path = os.path.join("videos/", "cb1.mp4")
+    #a_file_path = os.path.join("videos/", "cb1.mp4")
 
+    # a_file_path = os.path.join("videos/", "HeadingFixed-HD.mp4")
     #a_file_path = os.path.join("videos/", "Yoyo-LVRA.mp4")
-    #a_file_path = os.path.join("videos/", "Yoyo-LVRA-Low.mp4")
+    # a_file_path = os.path.join("videos/", "Yoyo-LVRA-Low.mp4")
+
 
 
     # a_file_path = os.path.join("videos/", "Drive_640_480_60Hz_a.mp4")
-    #a_file_path = os.path.join("videos/", "yoyo_640_480_60hz_2.mp4")
+    a_file_path = os.path.join("videos/", "yoyo_640_480_60hz_2.mp4")
 
     # a_file_path = os.path.join("videos/", "HeadingFixed-HD.mp4")
     # a_file_path = os.path.join("videos/", "test_optic_flow.mp4")
 
     source = flow_source(a_file_path)
-    source.calculate_flow(algorithm='tvl1', visualize_as="hsv_overlay", lower_mag_threshold = False, upper_mag_threshold=25,
-                           vector_scalar=3, save_input_images=False, save_output_images=False)
+    source.calculate_flow(algorithm='tvl1', visualize_as="streamlines", lower_mag_threshold = False, upper_mag_threshold=25,
+                           vector_scalar=3, save_input_images=False, save_output_images=True, fps = 30)
 
 
     # source.calculate_flow(algorithm='tvl1', visualize_as="hsv_stacked", lower_mag_threshold=2, upper_mag_threshold=40, vector_scalar=3)
@@ -455,3 +526,21 @@ if __name__ == "__main__":
     # source.calculate_flow(video_out_filename, algorithm='tvl1', visualize_as="vectors",
     #                       lower_mag_threshold=False, upper_mag_threshold=False)
 
+####
+
+from math import *
+
+# https://github.com/vivek3141/vector-field-visualizer/blob/master/src/divandcurl.py
+# def div(fx, fy, x, y, d=0.0001):
+#     f_x = eval("lambda x,y: " + str(fx))
+#     f_y = eval("lambda x,y: " + str(fy))
+#     return round(((f_x(x + d, y) - f_x(x, y)) / d) + ((f_y(x, y + d) - f_y(x, y)) / d), 3)
+#
+#
+# def curl(fx, fy, x, y, d=0.0001):
+#     f_x = eval("lambda x,y: " + str(fx))
+#     f_y = eval("lambda x,y: " + str(fy))
+#     return round(((f_y(x + d, y) - f_y(x, y)) / d) - ((f_x(x, y + d) - f_x(x, y)) / d), 3)
+#
+# https://plotly.com/python/streamline-plots/
+# https://www.geeksforgeeks.org/streamline-plots-in-plotly-using-python/
