@@ -4,19 +4,22 @@ import os
 import sys
 import numpy as np
 import av
-import pyvista as pv
 import logging
 import pickle
 from tqdm import tqdm
 
 import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
-os.add_dll_directory("D://opencvgpu//opencv_build_310//bin")
-os.add_dll_directory("C://Program Files//NVIDIA GPU Computing Toolkit//CUDA//v11.8//bin")
+
+try:
+    os.add_dll_directory("D://opencvgpu//opencv_build_310//bin")
+    os.add_dll_directory("C://Program Files//NVIDIA GPU Computing Toolkit//CUDA//v11.8//bin")
+    import cv2
+except:
+    import cv2
+
 sys.path.append('core')
-
-import cv2
 
 # np.set_printoptions(precision=3)
 # np.set_printoptions(suppress=True)
@@ -24,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # These lines allow me to see logging.info messages in my jupyter cell output
 logger.addHandler(logging.StreamHandler(stream=sys.stdout))
-logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
 
 
 class flow_source():
@@ -41,6 +44,8 @@ class flow_source():
         self.flow_frames_out_path = os.path.join(out_parent_dir, self.source_file_name, 'flow')
         self.video_out_path = os.path.join(out_parent_dir, self.source_file_name)
         self.magnitude_out_path = os.path.join(out_parent_dir, self.source_file_name, 'magnitude_data')
+
+        self.cuda_enabled = True
 
         self.streamline_points = None
 
@@ -75,10 +80,19 @@ class flow_source():
 
         elif algorithm == "farneback":
 
-            use_cuda = True
-            flow_algo = cv2.cuda_FarnebackOpticalFlow.create()
+            if self.cuda_enabled == False:
+                flow_algo = cv2.optflow.createOptFlow_Farneback()
+            else:
+                use_cuda = True
+                flow_algo = cv2.cuda_FarnebackOpticalFlow.create()
 
         elif algorithm == "tvl1":
+
+            if self.cuda_enabled == False:
+                logger.error('Non-cuda optical flow calculation not yet supported for ' + algorithm, stack_info=True, exc_info=True)
+                sys.exit(1)
+
+
 
             use_cuda = True
             flow_algo = cv2.cuda_OpticalFlowDual_TVL1.create()
@@ -92,6 +106,10 @@ class flow_source():
 
         elif algorithm == "pyrLK":
 
+            if self.cuda_enabled == False:
+                logger.error('Non-cuda optical flow calculation not yet supported for ' + algorithm, stack_info=True, exc_info=True)
+                sys.exit(1)
+
             use_cuda = True
             flow_algo = cv2.cuda_DensePyrLKOpticalFlow.create()
             flow_algo.setMaxLevel(10) # def 3
@@ -100,8 +118,16 @@ class flow_source():
 
         elif algorithm == "nvidia2":
 
+            logger.error('Optical flow calculation not yet supported for ' + algorithm, stack_info=True,
+                         exc_info=True)
+            sys.exit(1)
+
+            if self.cuda_enabled == False:
+                logger.error('Non-cuda optical flow calculation not yet supported for ' + algorithm, stack_info=True, exc_info=True)
+                sys.exit(1)
+
             use_cuda = True
-            flow_algo = cv2.cuda_NvidiaOpticalFlow_2_0.create((height_width[1], height_width.shape[0]),
+            flow_algo = cv2.cuda_NvidiaOpticalFlow_2_0.create((height_width[1], height_width[0]),
                                                         outputGridSize=1,  # 1,2, 4.  Higher is less accurate.
                                                         enableCostBuffer=True,
                                                         enableTemporalHints=True, )
@@ -182,9 +208,10 @@ class flow_source():
         width = container_in.streams.video[0].width
         use_cuda, flow_algo = self.create_flow_object(algorithm, (height, width))
 
-        if use_cuda:
+        if use_cuda and self.cuda_enabled:
             image1_gpu = cv2.cuda_GpuMat()
             image2_gpu = cv2.cuda_GpuMat()
+            flow_out = cv2.cuda_GpuMat()
             foreground_mask_gpu = cv2.cuda_GpuMat()
             clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
         else:
@@ -210,14 +237,14 @@ class flow_source():
 
                 foreground_mask = background_subtractor.apply(prev_frame)
 
-                if use_cuda:
+                if use_cuda and self.cuda_enabled:
 
                     image2_gpu.upload(prev_frame)
-                    image2_gpu = cv2.cuda.cvtColor(image2_gpu, cv2.COLOR_BGR2GRAY)
-                    image2_gpu = clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
+                    if algorithm != "nvidia2":
+                        image2_gpu = cv2.cuda.cvtColor(image2_gpu, cv2.COLOR_BGR2GRAY)
+                        image2_gpu = clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
 
                 else:
-
                     image2_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
                     image2_gray = clahe.apply(image2_gray)
 
@@ -244,12 +271,14 @@ class flow_source():
                 raw_frame.to_image().save(os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
 
             # Calculate flow.  If possible, use cuda.
-            if use_cuda:
+            if use_cuda and self.cuda_enabled:
 
                 image1_gpu.upload(frame)
+
                 image1_gpu = cv2.cuda.cvtColor(image1_gpu, cv2.COLOR_BGR2GRAY)
                 image1_gpu = clahe.apply(image1_gpu, cv2.cuda_Stream.Null())
 
+                # self.convert_nvidia_flow(flow_algo, flow_out, image1_gpu, image2_gpu)
                 flow = flow_algo.calc(image1_gpu, image2_gpu, flow=None)
 
                 # move images from gpu to cpu
@@ -339,6 +368,20 @@ class flow_source():
         mag_image_fileloc = os.path.join(self.magnitude_out_path, mag_image_filename)
         self.generate_mag_histogram(mag_image_fileloc, cumulative_mag_hist, mag_hist[1])
 
+    def convert_nvidia_flow(self,flow_algo, flow_out, image1_gpu, image2_gpu):
+
+        flow_gpu = cv2.cuda_GpuMat(image1_gpu.size())
+        flow = flow_algo.calc(image1_gpu, image2_gpu, flow_gpu, cv2.cuda_Stream.Null())
+
+        flow_nums = np.array(image1_gpu.size())
+        flow_algo.convertToFloat(flow[0].download(), flow_nums)
+
+        # flowOut = np.array(flow[0].size())
+        # f0 = flow[0]
+        # f1 = flow[1]
+        # a=1
+        # flow = flow_algo.convertToFloat(flow[0],flowOut)
+
 
     def apply_magnitude_thresholds_and_rescale(self, magnitude, lower_mag_threshold = False, upper_mag_threshold = False):
 
@@ -356,77 +399,38 @@ class flow_source():
 
     def visualize_flow_as_streamlines(self, frame, flow):
 
-        
         # dbfile = open(os.path.join(self.video_out_path,"streamlines.pickle"), 'wb')
         # pickle.dump({"frame": frame, "flow": flow},dbfile)
         # dbfile.close()
 
-        w = int(np.shape(frame)[1])
-        h = int(np.shape(frame)[0])
+        x = np.arange(0, np.shape(frame)[0], 1)
+        y = np.arange(0, np.shape(frame)[1], 1)
+        grid_x, grid_y = np.meshgrid(y, x)
 
-        x = np.arange(0, np.shape(frame)[0], 20)
-        y = np.arange(0, np.shape(frame)[1], 20)
-        xx, yy, zz = np.meshgrid(y, x, 0)
-
-        grid = pv.UniformGrid()
-        grid.dimensions = (w, h, 1)
-        grid.origin = (0, 0, 0)
-        grid.spacing = (1, 1, 1)
-        grid.show_scalar_bar = False
-
-        grid.texture_map_to_plane(inplace=True)
-        # tex = pv.numpy_to_texture(cv2.rotate(frame, cv2.ROTATE_180))
-        tex = pv.numpy_to_texture(frame)
-
-        flow3D = np.zeros([np.shape(flow)[0] * np.shape(flow)[1], 3], dtype=np.float32)
-        flow3D[:, 0] = -flow[..., 0].flatten()
-        flow3D[:, 1] = -flow[..., 1].flatten()
-
-        grid['vectors'] = flow3D
-        grid.set_active_vectors("vectors")
-
-        p = pv.Plotter(off_screen=True, window_size=[640, 480])
-        p.add_mesh(grid, texture=tex)
-
+        start_grid_res = 10
         start_pts = np.array(
-            [[x, y, 0] for x in np.arange(0, np.shape(frame)[0], 20) for y in np.arange(0, np.shape(frame)[1], 20)])
+            [[y, x] for x in np.arange(0, np.shape(frame)[0], start_grid_res)
+             for y in np.arange(0, np.shape(frame)[1], start_grid_res)])
 
-        try:
+        fig, ax = plt.subplots(figsize=(6.4, 4.8), dpi=100)
 
-            line_streamlines = grid.streamlines_evenly_spaced_2D(
-                start_position=(0, 0, 0),
-                step_length=10,
-                separating_distance=20,
-                separating_distance_ratio=0.7,
-                compute_vorticity=False,  # vorticity already exists in dataset
-                vectors="vectors",
-                #     progress_bar= True,
-            )
-        except:
-            print('B')
-            return frame
+        plt.streamplot(grid_x, grid_y, -flow[..., 0], -flow[..., 1],
+                       start_points=start_pts,
+                       color='w',
+                       maxlength=.4,
+                       arrowsize=0,
+                       linewidth=.8) # density = 1
 
-        try:
-            p.add_mesh(line_streamlines.tube(radius=2), color='w')
-        except:
-            print('C')
-            return frame
-        
-        p.camera_position = 'xy'
-        p.view_xy()
-        p.camera.up = (0.0, 1.0, 0.0)
-        p.camera.zoom(1.7)
-        p.store_image=True
-        p.render()
-        p.show()
-        
-        im = p.image
-        p.close()
+        plt.axis('off')
+        plt.imshow(frame)
 
-    
-        return cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+        canvas = FigureCanvas(fig)
+        canvas.draw()  # draw the canvas, cache the renderer
 
-
+        width, height = fig.get_size_inches() * fig.get_dpi()
+        image = np.frombuffer(canvas.tostring_rgb(), dtype=np.uint8).reshape(int(height), int(width), 3)
+        plt.close('all')
+        return image
 
     def visualize_flow_as_hsv(self, magnitude, angle, upper_bound = False):
         '''
@@ -492,22 +496,25 @@ class flow_source():
         return magnitude
 
 if __name__ == "__main__":
+
     #a_file_path = os.path.join("videos/", "cb1.mp4")
 
     # a_file_path = os.path.join("videos/", "HeadingFixed-HD.mp4")
-    #a_file_path = os.path.join("videos/", "Yoyo-LVRA.mp4")
+    a_file_path = os.path.join("videos/", "Yoyo-LVRA.mp4")
     # a_file_path = os.path.join("videos/", "Yoyo-LVRA-Low.mp4")
 
-
-
     # a_file_path = os.path.join("videos/", "Drive_640_480_60Hz_a.mp4")
-    a_file_path = os.path.join("videos/", "yoyo_640_480_60hz_2.mp4")
+    #a_file_path = os.path.join("videos/", "yoyo_640_480_60hz_2.mp4")
 
     # a_file_path = os.path.join("videos/", "HeadingFixed-HD.mp4")
     # a_file_path = os.path.join("videos/", "test_optic_flow.mp4")
 
+
+
     source = flow_source(a_file_path)
-    source.calculate_flow(algorithm='tvl1', visualize_as="streamlines", lower_mag_threshold = False, upper_mag_threshold=25,
+    source.cuda_enabled = True
+
+    source.calculate_flow(algorithm='tvl1', visualize_as="hsv_overlay", lower_mag_threshold = False, upper_mag_threshold=25,
                            vector_scalar=3, save_input_images=False, save_output_images=True, fps = 30)
 
 
