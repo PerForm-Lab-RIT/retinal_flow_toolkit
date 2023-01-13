@@ -50,6 +50,10 @@ I tried to implement cuda_NvidiaOpticalFlow_2_0, but ran into indecipherable err
 
 ![image](https://user-images.githubusercontent.com/8962011/212419849-328487d7-694f-458c-bf71-82fd5aa83851.png)
 
+## Output
+
+Output frames and movies will be organized in sensibly-named subfolders of /flow_out/<movie_name>. 
+
 ## Setting the upper_mag_threshold
 
 Output will be placed in /flow_out/<movie_name>.
