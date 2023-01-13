@@ -45,5 +45,17 @@ HSV color representations of flow are best if scaled to a range defined by a rea
 
 ![image](https://user-images.githubusercontent.com/8962011/212422892-a28d9352-9b66-471e-a26f-13cd9f050c49.png)
 
+## Dependencies
+
+
+numpy
+av for movie makin'
+logging
+pickle
+tqdm for the nifty progress bar that shows up in your console.
+
+![image](https://user-images.githubusercontent.com/8962011/212423219-734e351a-0139-4596-ac8b-8d5bc28c7316.png)
+
+
 
 
