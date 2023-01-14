@@ -497,57 +497,15 @@ class flow_source():
 
 if __name__ == "__main__":
 
-    #a_file_path = os.path.join("videos/", "cb1.mp4")
-
-    # a_file_path = os.path.join("videos/", "HeadingFixed-HD.mp4")
-    a_file_path = os.path.join("videos/", "Yoyo-LVRA.mp4")
-    # a_file_path = os.path.join("videos/", "Yoyo-LVRA-Low.mp4")
-
-    # a_file_path = os.path.join("videos/", "Drive_640_480_60Hz_a.mp4")
-    #a_file_path = os.path.join("videos/", "yoyo_640_480_60hz_2.mp4")
-
-    # a_file_path = os.path.join("videos/", "HeadingFixed-HD.mp4")
-    # a_file_path = os.path.join("videos/", "test_optic_flow.mp4")
-
-
-
+    a_file_path = os.path.join("demo_input_video", "linear_travel.mp4")
     source = flow_source(a_file_path)
     source.cuda_enabled = True
+    source.calculate_flow(algorithm='tvl1', visualize_as="vectors", lower_mag_threshold = False, upper_mag_threshold=25,
+                           vector_scalar=3, save_input_images=False, save_output_images=False, fps = 30)
 
-    source.calculate_flow(algorithm='tvl1', visualize_as="hsv_overlay", lower_mag_threshold = False, upper_mag_threshold=25,
-                           vector_scalar=3, save_input_images=False, save_output_images=True, fps = 30)
-
-
-    # source.calculate_flow(algorithm='tvl1', visualize_as="hsv_stacked", lower_mag_threshold=2, upper_mag_threshold=40, vector_scalar=3)
-
-    # source.calculate_flow(algorithm='tvl1', visualize_as="vectors", lower_mag_threshold=False, upper_mag_threshold=20,
-    #                       vector_scalar=3, save_input_images=False, save_midpoint_images=False)
-
-    # source.calculate_flow(algorithm='tvl1', visualize_as="hsv_overlay", lower_mag_threshold=2, upper_mag_threshold=40,
-    #                       fps=15, vector_scalar=3)
-
-    # a_file_path = os.path.join("videos/", "test_optic_flow.mp4")
+    #
+    # a_file_path = os.path.join("demo_input_video", "moving_sphere.mp4")
     # source = flow_source(a_file_path)
-    # video_out_filename = "test_optic_flow_hsv-stacked.mp4"
-    # source.vector_scalar = 5
-    # source.calculate_flow(video_out_filename, algorithm='tvl1', visualize_as="vectors",
-    #                       lower_mag_threshold=False, upper_mag_threshold=False)
-
-####
-
-from math import *
-
-# https://github.com/vivek3141/vector-field-visualizer/blob/master/src/divandcurl.py
-# def div(fx, fy, x, y, d=0.0001):
-#     f_x = eval("lambda x,y: " + str(fx))
-#     f_y = eval("lambda x,y: " + str(fy))
-#     return round(((f_x(x + d, y) - f_x(x, y)) / d) + ((f_y(x, y + d) - f_y(x, y)) / d), 3)
-#
-#
-# def curl(fx, fy, x, y, d=0.0001):
-#     f_x = eval("lambda x,y: " + str(fx))
-#     f_y = eval("lambda x,y: " + str(fy))
-#     return round(((f_y(x + d, y) - f_y(x, y)) / d) - ((f_x(x, y + d) - f_x(x, y)) / d), 3)
-#
-# https://plotly.com/python/streamline-plots/
-# https://www.geeksforgeeks.org/streamline-plots-in-plotly-using-python/
+    # source.cuda_enabled = True
+    # source.calculate_flow(algorithm='tvl1', visualize_as="vectors", lower_mag_threshold = False, upper_mag_threshold=25,
+    #                        vector_scalar=3, save_input_images=False, save_output_images=False, fps = 30)
