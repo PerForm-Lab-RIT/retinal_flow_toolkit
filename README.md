@@ -1,4 +1,5 @@
-# Retinal flow toolkit ( generate optical flow from a movie )
+# Retinal flow toolkit 
+( generate gaze-centered optical flow from a movie )
 
 A simple module for the calculation of optic flow.  
 
