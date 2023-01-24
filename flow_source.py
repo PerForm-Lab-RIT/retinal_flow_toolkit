@@ -172,7 +172,6 @@ class flow_source():
 
     def calculate_flow(self, video_out_name = False, algorithm = "deepflow", visualize_as="hsv_stacked",
             hist_params = (100, 0,40),
-            fps = False,
             vector_scalar = 1,
             lower_mag_threshold = False, 
             upper_mag_threshold = False,
@@ -184,7 +183,6 @@ class flow_source():
         average_fps = container_in.streams.video[0].average_rate
         num_frames = container_in.streams.video[0].frames
 
-
         video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
 
         ##############################
@@ -193,13 +191,10 @@ class flow_source():
             os.makedirs(self.video_out_path)
 
         container_out = av.open(os.path.join(self.video_out_path, video_out_name), mode="w", timeout = None)
-        stream = container_out.add_stream("libx264", framerate = average_fps)
+        stream = container_out.add_stream("libx264", framerate=average_fps)
         stream.options["crf"] = "20"
-        stream.pix_fmt = "yuv420p"
-
-        if fps == False:
-            stream.time_base = container_in.streams.video[0].time_base
-            stream.codec_context.time_base = container_in.streams.video[0].codec_context.time_base
+        stream.pix_fmt = container_in.streams.video[0].pix_fmt
+        stream.time_base = container_in.streams.video[0].time_base
 
         ##############################
         # Prepare for flow calculations
@@ -326,12 +321,6 @@ class flow_source():
                                                               image_1_gray = image1_gray,
                                                               vector_scalar = vector_scalar)
 
-            if fps is False or fps is None:
-                
-                frame_out.time_base = raw_frame.time_base
-                # frame_out.pts = raw_frame.pts
-                # frame_out.dts = raw_frame.dts
-                # print(raw_frame.dts)
 
             if save_output_images:
 
@@ -342,10 +331,6 @@ class flow_source():
 
             # Add packet to video
             for packet in stream.encode(frame_out):
-                if fps is False or fps is None:
-                    packet.time_base = raw_frame.time_base
-                    packet.dts = raw_frame.dts
-                    packet.pts = raw_frame.pts
                 container_out.mux(packet)
 
         # Flush stream
@@ -501,7 +486,7 @@ if __name__ == "__main__":
     source = flow_source(a_file_path)
     source.cuda_enabled = True
     source.calculate_flow(algorithm='tvl1', visualize_as="vectors", lower_mag_threshold = False, upper_mag_threshold=25,
-                           vector_scalar=3, save_input_images=False, save_output_images=False, fps = 30)
+                           vector_scalar=3, save_input_images=False, save_output_images=False)
 
     #
     # a_file_path = os.path.join("demo_input_video", "moving_sphere.mp4")
