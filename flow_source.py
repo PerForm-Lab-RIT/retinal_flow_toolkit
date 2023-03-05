@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 import warnings
 import pandas as pd
-
+import subprocess
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
@@ -135,11 +135,13 @@ class video_source():
 
         return use_cuda, flow_algo
 
-    def convert_flow_to_frame(self, frame, flow, magnitude, angle, visualize_as, upper_mag_threshold, mask=None,
+    def add_visualization(self, frame, flow, magnitude, angle, visualize_as, upper_mag_threshold, mask=None,
                               image_1_gray=None, vector_scalar=1):
 
-        if visualize_as in ['gaze_shifted_hsv']:
-            logger.exception('This visualization method is only available for pupil labs data folders')
+        # if visualize_as in ['gaze_shifted_hsv']:
+        #     logger.exception('This visualization method is only available for pupil labs data folders')
+        image_out = False
+        frame_out = False
 
         if visualize_as == "streamlines":
 
@@ -166,9 +168,6 @@ class video_source():
 
             frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
 
-        else:
-            logger.exception('visualize_as string not supported')
-
         return image_out, frame_out
 
     def set_stream_dimensions(self, stream, visualize_as, height, width):
@@ -191,12 +190,24 @@ class video_source():
                        save_midpoint_images=False,
                        save_output_images=False):
 
+        def encode_frame(outgoing_frame, raw_frame_in, stream_in):
+            for packet_out in stream.encode(outgoing_frame):
+                packet_out.stream = stream_in
+                packet_out.time_base = time_base
+                packet_out.pts = raw_frame_in.pts
+                packet_out.dts = raw_frame_in.dts
+                container_out.mux(packet_out)
+
         container_in = av.open(self.file_path)
         average_fps = container_in.streams.video[0].average_rate
         num_frames = container_in.streams.video[0].frames
         time_base = container_in.streams.video[0].time_base
 
+        height = container_in.streams.video[0].height
+        width = container_in.streams.video[0].width
+
         video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
+
 
         # container_in.sort_dts = True
         # container_in.flush_packets = True
@@ -207,125 +218,110 @@ class video_source():
             os.makedirs(self.video_out_path)
 
         container_out = av.open(os.path.join(self.video_out_path, video_out_name), mode="w", timeout=None)
+        try:
+            subprocess.check_output('nvidia-smi')
+            #print('Nvidia GPU detected!')#
+            stream = container_out.add_stream("h264_nvenc", framerate=average_fps)
+        except Exception:  # this command not being found can raise quite a few different errors depending on the configuration
+            stream = container_out.add_stream("libx264", framerate=average_fps)
+            # print('No Nvidia GPU in system!  Defaulting to a different encoder')
 
-        stream = container_out.add_stream("libx264", framerate=average_fps)
-
-        stream.options["crf"] = "20"
+        stream.options["crf"] = "10"
         stream.pix_fmt = container_in.streams.video[0].pix_fmt
         stream.time_base = time_base
+        stream = self.set_stream_dimensions(stream, visualize_as, height, width)
 
         ##############################
         # Prepare for flow calculations
 
-        height = container_in.streams.video[0].height
-        width = container_in.streams.video[0].width
         use_cuda, flow_algo = self.create_flow_object(algorithm, (height, width))
 
         if use_cuda and self.cuda_enabled:
+
             image1_gpu = cv2.cuda_GpuMat()
             image2_gpu = cv2.cuda_GpuMat()
             flow_out = cv2.cuda_GpuMat()
             foreground_mask_gpu = cv2.cuda_GpuMat()
             clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
+
         else:
             clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
+
+
+
 
         world_index = 0
         for raw_frame in tqdm(container_in.decode(video=0), desc="Generating " + video_out_name, unit='frames',
                               total=num_frames):
-
+            # First frame
             if raw_frame.index == 0:
-
-                stream = self.set_stream_dimensions(stream, visualize_as, height, width)
 
                 prev_frame = raw_frame.to_ndarray(format='bgr24')
                 prev_frame = self.filter_frame(prev_frame)
 
+                # Apply histogram normalization.
                 if use_cuda and self.cuda_enabled:
-
                     image2_gpu.upload(prev_frame)
-                    if algorithm != "nvidia2":
-                        image2_gpu = cv2.cuda.cvtColor(image2_gpu, cv2.COLOR_BGR2GRAY)
-                        image2_gpu = clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
-
+                    image2_gpu = cv2.cuda.cvtColor(image2_gpu, cv2.COLOR_BGR2GRAY)
+                    image2_gpu = clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
                 else:
                     image2_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
                     image2_gray = clahe.apply(image2_gray)
 
+                # Save input images?
                 if save_input_images:
-
                     if os.path.isdir(self.raw_frames_out_path) is False:
                         os.makedirs(self.raw_frames_out_path)
-
                     raw_frame.to_image().save(
                         os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
 
                 prev_raw_frame = raw_frame
 
-                # write out a blank first frame
+                # Write out a blank first frame
                 frame_out = np.zeros([raw_frame.height, raw_frame.width, 3], dtype=np.uint8)
                 frame_out = av.VideoFrame.from_ndarray(frame_out, format='bgr24')
 
-                for packet in stream.encode(frame_out):
-                    packet.stream = stream
-                    packet.time_base = time_base
-                    packet.pts = raw_frame.pts
-                    packet.dts = raw_frame.dts
-                    container_out.mux(packet)
+                encode_frame(frame_out, raw_frame, stream)
 
                 continue
 
             else:
-
                 frame = raw_frame.to_ndarray(format='bgr24')
-
-                self.modify_frame(frame, raw_frame.index)
+                # self.modify_frame(frame, raw_frame.index)
                 frame = self.filter_frame(frame)
-
-            if save_input_images:
-
-                if os.path.isdir(self.raw_frames_out_path) is False:
-                    os.makedirs(self.raw_frames_out_path)
-
-                raw_frame.to_image().save(os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
 
             # Calculate flow.  If possible, use cuda.
             if use_cuda and self.cuda_enabled:
-
                 # self.temp_fun(frame,raw_frame)
                 image1_gpu.upload(frame)
-
                 image1_gpu = cv2.cuda.cvtColor(image1_gpu, cv2.COLOR_BGR2GRAY)
                 image1_gpu = clahe.apply(image1_gpu, cv2.cuda_Stream.Null())
-
                 flow = flow_algo.calc(image1_gpu, image2_gpu, flow=None)
-
                 # move images from gpu to cpu
                 image1_gray = image1_gpu.download()
-
                 image2_gpu = image1_gpu.clone()
-
                 flow = flow.download()
-
             else:
                 image1_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 image1_gray = clahe.apply(image1_gray)
                 flow = flow_algo.calc(image1_gray, image2_gray, flow=None)
                 image2_gray = image1_gray
 
-            if save_midpoint_images:
-
-                if os.path.isdir(self.mid_frames_out_path) is False:
-                    os.makedirs(self.mid_frames_out_path)
-
-                cv2.imwrite(str(os.path.join(self.mid_frames_out_path, '{:06d}.png'.format(raw_frame.index))),
-                            image1_gray, [cv2.IMWRITE_PNG_COMPRESSION, 0])
-
             # Convert flow to mag / angle
             magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
             angle = np.pi + angle
-
             magnitude = self.filter_magnitude(magnitude, frame)
+            magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
+
+            # Convert flow to visualization
+            image_out, frame_out = self.add_visualization(frame,
+                                                          flow,
+                                                          magnitude,
+                                                          angle,
+                                                          visualize_as,
+                                                          upper_mag_threshold,
+                                                          image_1_gray=image1_gray,
+                                                          vector_scalar=vector_scalar)
 
             # Store the histogram of avg magnitudes
             if raw_frame.index == 1:
@@ -338,46 +334,41 @@ class video_source():
                     np.sum([np.multiply((raw_frame.index - 1), cumulative_mag_hist), mag_hist[0]], axis=0),
                     raw_frame.index - 1)
 
-            magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
+            # Save input images?
+            if save_input_images:
+                if os.path.isdir(self.raw_frames_out_path) is False:
+                    os.makedirs(self.raw_frames_out_path)
+                raw_frame.to_image().save(
+                    os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
 
-            # Convert flow to visualization
-            image_out, frame_out = self.convert_flow_to_frame(frame,
-                                                              flow,
-                                                              magnitude,
-                                                              angle,
-                                                              visualize_as,
-                                                              upper_mag_threshold,
-                                                              image_1_gray=image1_gray,
-                                                              vector_scalar=vector_scalar)
+            # Save midpoint images?
+            if save_midpoint_images:
+                if os.path.isdir(self.mid_frames_out_path) is False:
+                    os.makedirs(self.mid_frames_out_path)
+                cv2.imwrite(str(os.path.join(self.mid_frames_out_path, '{:06d}.png'.format(raw_frame.index))),
+                            image1_gray, [cv2.IMWRITE_PNG_COMPRESSION, 0])
 
+            # Save output images?
             if save_output_images:
-
                 if os.path.isdir(self.flow_frames_out_path) is False:
                     os.makedirs(self.flow_frames_out_path)
-
                 cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(raw_frame.index))),
                             image_out)
 
+            # Add packet to video
             frame_out.pts = raw_frame.pts
             frame_out.time_base = raw_frame.time_base
-
-            # Add packet to video
-            for packet in stream.encode(frame_out):
-                packet.stream = stream
-                packet.time_base = time_base
-                packet.pts = raw_frame.pts
-                packet.dts = raw_frame.dts
-                container_out.mux(packet)
+            encode_frame(frame_out, raw_frame, stream)
 
             prev_raw_frame = raw_frame
             world_index = world_index + 1
 
-        for packet in stream.encode():
-            packet.stream = stream
-            packet.time_base = time_base
-            packet.pts = raw_frame.pts + 1000 + world_index
-            packet.dts = raw_frame.pts + 1000 + world_index
-            container_out.mux(packet)
+        # for packet in stream.encode():
+        #     packet.stream = stream
+        #     packet.time_base = time_base
+        #     packet.pts = raw_frame.pts + 1000 + world_index
+        #     packet.dts = raw_frame.pts + 1000 + world_index
+        #     container_out.mux(packet)
 
         # Close the file
         container_out.close()
@@ -398,6 +389,7 @@ class video_source():
 
     def modify_frame(self,frame,frame_index):
         pass
+
     def convert_nvidia_flow(self, flow_algo, flow_out, image1_gpu, image2_gpu):
 
         flow_gpu = cv2.cuda_GpuMat(image1_gpu.size())
@@ -703,11 +695,29 @@ class pupil_labs_source(video_source):
 
         return recording_folder
 
-    def convert_flow_to_frame(self, frame, flow, magnitude, angle, visualize_as, upper_mag_threshold, mask=None,
-                              image_1_gray=None, vector_scalar=1):
+    def add_visualization(self,
+                          frame,
+                          flow,
+                          magnitude,
+                          angle,
+                          visualize_as,
+                          upper_mag_threshold,
+                          mask=None,
+                          image_1_gray=None,
+                          vector_scalar=1):
 
         if visualize_as in ['hsv_stacked']:
             logger.exception('This visualization method is not available for pupil labs data folders')
+
+        image_out, frame_out = super().add_visualization(frame,
+                                                         flow,
+                                                         magnitude,
+                                                         angle,
+                                                         visualize_as,
+                                                         upper_mag_threshold,
+                                                         mask=mask,
+                                                         image_1_gray=image_1_gray,
+                                                         vector_scalar=vector_scalar)
 
         if visualize_as == "gaze_centered_hsv":
 
@@ -716,14 +726,13 @@ class pupil_labs_source(video_source):
 
         return image_out, frame_out
 
-
 if __name__ == "__main__":
     a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
 
     source = pupil_labs_source(a_file_path,recording_number='007')
     source.cuda_enabled = True
 
-    source.calculate_flow(algorithm='tvl1', visualize_as="gaze_centered", lower_mag_threshold=False,
+    source.calculate_flow(algorithm='tvl1', visualize_as="hsv_overlay", lower_mag_threshold=False,
                           upper_mag_threshold=25,
                           vector_scalar=3, save_input_images=False, save_output_images=True)
 
