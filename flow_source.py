@@ -46,8 +46,10 @@ class video_source():
         self.video_out_path = os.path.join(out_parent_dir, self.source_file_name)
         self.magnitude_out_path = os.path.join(out_parent_dir, self.source_file_name, 'magnitude_data')
 
-        self.cuda_enabled = True
+        self.flow_algo = False
+        self.clahe = False
 
+        self.cuda_enabled = True
         self.streamline_points = None
 
     @staticmethod
@@ -72,21 +74,22 @@ class video_source():
 
         plt.savefig(mag_image_fileloc)
 
-    def create_flow_object(self, algorithm, height_width=False):
+    def set_flow_object(self, algorithm, height_width=False):
 
-        use_cuda = False
+        # Even if self.cuda_is_enabled=True, some algos don't support cuda!
+        algo_supports_cuda = False
 
         if algorithm == "deepflow":
 
-            flow_algo = cv2.optflow.createOptFlow_DeepFlow()
+            self.flow_algo = cv2.optflow.createOptFlow_DeepFlow()
 
         elif algorithm == "farneback":
 
             if not self.cuda_enabled:
-                flow_algo = cv2.optflow.createOptFlow_Farneback()
+                self.flow_algo = cv2.optflow.createOptFlow_Farneback()
             else:
-                use_cuda = True
-                flow_algo = cv2.cuda_FarnebackOpticalFlow.create()
+                algo_supports_cuda = True
+                self.flow_algo = cv2.cuda_FarnebackOpticalFlow.create()
 
         elif algorithm == "tvl1":
 
@@ -95,15 +98,15 @@ class video_source():
                              stack_info=True, exc_info=True)
                 sys.exit(1)
 
-            use_cuda = True
-            flow_algo = cv2.cuda_OpticalFlowDual_TVL1.create()
-            flow_algo.setNumScales(30)  # (1/5)^N-1 def: 5
-            # flow_algo.setScaleStep(0.7)  #
-            # flow_algo.setLambda(0.5)  # default 0.15. smaller = smoother output.
-            # flow_algo.setScaleStep(0.7)  # 0.8 by default. Not well documented.  0.7 did better with dots?
-            # flow_algo.setEpsilon(0.005)  # def: 0.01
-            # flow_algo.setTau(0.5)
-            # flow_algo.setGamma(0.5) # def 0
+            algo_supports_cuda = True
+            self.flow_algo = cv2.cuda_OpticalFlowDual_TVL1.create()
+            self.flow_algo.setNumScales(30)  # (1/5)^N-1 def: 5
+            # self.flow_algo.setScaleStep(0.7)  #
+            # self.flow_algo.setLambda(0.5)  # default 0.15. smaller = smoother output.
+            # self.flow_algo.setScaleStep(0.7)  # 0.8 by default. Not well documented.  0.7 did better with dots?
+            # self.flow_algo.setEpsilon(0.005)  # def: 0.01
+            # self.flow_algo.setTau(0.5)
+            # self.flow_algo.setGamma(0.5) # def 0
 
         elif algorithm == "pyrLK":
 
@@ -112,13 +115,15 @@ class video_source():
                              exc_info=True)
                 sys.exit(1)
 
-            use_cuda = True
-            flow_algo = cv2.cuda_DensePyrLKOpticalFlow.create()
-            flow_algo.setMaxLevel(10)  # default 3
-            flow_algo.setWinSize((3, 3))  # default 13, 13
+            algo_supports_cuda = True
+            self.flow_algo = cv2.cuda_DensePyrLKOpticalFlow.create()
+            self.flow_algo.setMaxLevel(10)  # default 3
+            self.flow_algo.setWinSize((3, 3))  # default 13, 13
             # flow_algo.setNumIters(30) # 30 def
 
         elif algorithm == "nvidia2":
+            # This method was a mess when I attempted to implement it.
+            # From what I've seen on the net, others have not had much success, either.
 
             logger.error('Optical flow calculation not yet supported for ' + algorithm, stack_info=True,
                          exc_info=True)
@@ -133,7 +138,7 @@ class video_source():
         else:
             logger.error('Optical flow algorithm not yet implemented.')
 
-        return use_cuda, flow_algo
+        return algo_supports_cuda
 
     def add_visualization(self, frame, flow, magnitude, angle, visualize_as, upper_mag_threshold, mask=None,
                               image_1_gray=None, vector_scalar=1):
@@ -234,21 +239,18 @@ class video_source():
         ##############################
         # Prepare for flow calculations
 
-        use_cuda, flow_algo = self.create_flow_object(algorithm, (height, width))
+        algo_supports_cuda = self.set_flow_object(algorithm, (height, width))
 
-        if use_cuda and self.cuda_enabled:
+        if algo_supports_cuda and self.cuda_enabled:
 
             image1_gpu = cv2.cuda_GpuMat()
             image2_gpu = cv2.cuda_GpuMat()
-            flow_out = cv2.cuda_GpuMat()
-            foreground_mask_gpu = cv2.cuda_GpuMat()
-            clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
+            # flow_out = cv2.cuda_GpuMat()
+            # foreground_mask_gpu = cv2.cuda_GpuMat()
+            self.clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
 
         else:
-            clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
-
-
-
+            self.clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
 
         world_index = 0
         for raw_frame in tqdm(container_in.decode(video=0), desc="Generating " + video_out_name, unit='frames',
@@ -260,13 +262,13 @@ class video_source():
                 prev_frame = self.filter_frame(prev_frame)
 
                 # Apply histogram normalization.
-                if use_cuda and self.cuda_enabled:
+                if algo_supports_cuda and self.cuda_enabled:
                     image2_gpu.upload(prev_frame)
                     image2_gpu = cv2.cuda.cvtColor(image2_gpu, cv2.COLOR_BGR2GRAY)
-                    image2_gpu = clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
+                    image2_gpu = self.clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
                 else:
                     image2_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-                    image2_gray = clahe.apply(image2_gray)
+                    image2_gray = self.clahe.apply(image2_gray)
 
                 # Save input images?
                 if save_input_images:
@@ -290,22 +292,17 @@ class video_source():
                 # self.modify_frame(frame, raw_frame.index)
                 frame = self.filter_frame(frame)
 
-            # Calculate flow.  If possible, use cuda.
-            if use_cuda and self.cuda_enabled:
-                # self.temp_fun(frame,raw_frame)
-                image1_gpu.upload(frame)
-                image1_gpu = cv2.cuda.cvtColor(image1_gpu, cv2.COLOR_BGR2GRAY)
-                image1_gpu = clahe.apply(image1_gpu, cv2.cuda_Stream.Null())
-                flow = flow_algo.calc(image1_gpu, image2_gpu, flow=None)
-                # move images from gpu to cpu
-                image1_gray = image1_gpu.download()
-                image2_gpu = image1_gpu.clone()
-                flow = flow.download()
+            # Calculate flow
+            if algo_supports_cuda and self.cuda_enabled:
+                flow, image1_gray, image2_gpu = self.calculate_flow_for_frame(frame,
+                                                     image1_gpu,
+                                                     image2_gpu,
+                                                     use_cuda=True)
             else:
-                image1_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                image1_gray = clahe.apply(image1_gray)
-                flow = flow_algo.calc(image1_gray, image2_gray, flow=None)
-                image2_gray = image1_gray
+                flow, image1_gray, image2_gray = self.calculate_flow_for_frame(frame,
+                                                     cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),
+                                                     image2_gray,
+                                                     use_cuda=False)
 
             # Convert flow to mag / angle
             magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
@@ -386,6 +383,30 @@ class video_source():
         mag_image_filename = self.source_file_name + '_' + algorithm + '_' + visualize_as + '_mag.jpg'
         mag_image_fileloc = os.path.join(self.magnitude_out_path, mag_image_filename)
         self.generate_mag_histogram(mag_image_fileloc, cumulative_mag_hist, mag_hist[1])
+
+    def calculate_flow_for_frame(self, raw_frame, frame1, frame2, use_cuda):
+
+        # Calculate flow.  If possible, use cuda.
+        if use_cuda:
+            # self.temp_fun(frame,raw_frame)
+            frame1.upload(raw_frame)
+            image1_gpu = cv2.cuda.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+            image1_gpu = self.clahe.apply(image1_gpu, cv2.cuda_Stream.Null())
+            flow = self.flow_algo.calc(image1_gpu, frame2, flow=None)
+            # move images from gpu to cpu
+            image1_gray = image1_gpu.download()
+            image2_gpu = image1_gpu.clone()
+            flow = flow.download()
+
+            return flow, image1_gray, image2_gpu
+
+        else:
+            image1_gray = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
+            image1_gray = self.clahe.apply(image1_gray)
+            flow = self.flow_algo.calc(image1_gray, frame2, flow=None)
+            image2_gray = image1_gray
+
+            return flow, image1_gray, image2_gray
 
     def modify_frame(self,frame,frame_index):
         pass
