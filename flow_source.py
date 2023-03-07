@@ -128,72 +128,7 @@ class video_source():
     # def add_visualization(self, raw_frame, frame, flow, magnitude, angle, visualize_as, upper_mag_threshold, mask=None,
     #                           image_1_gray=None, vector_scalar=1):
 
-    def add_visualization(self,
-                          raw_frame,
-                          frame,
-                          visualize_as,
-                          upper_mag_threshold=False,
-                          lower_mag_threshold=False,
-                          mask=None,
-                          image1_gpu=None,
-                          image2_gpu=None,
-                          image1_gray=None,
-                          image2_gray=None,
-                          algo_supports_cuda=False,
-                          vector_scalar=1):
 
-        # if visualize_as in ['gaze_shifted_hsv']:
-        #     logger.exception('This visualization method is only available for pupil labs data folders')
-        image_out = False
-        frame_out = False
-
-        # Calculate flow
-        if algo_supports_cuda and self.cuda_enabled:
-            # With cuda
-            flow, image1_gray, image2_gpu = self.calculate_flow_for_frame(frame,
-                                                                          image2_gpu,
-                                                                          gpu1=image1_gpu,
-                                                                          use_cuda=True)
-        else:
-            # Without cuda
-            flow, image1_gray, image2_gray = self.calculate_flow_for_frame(frame,
-                                                                           image2_gray,
-                                                                           use_cuda=False)
-
-        # Convert flow to mag / angle
-        magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-        angle = np.pi + angle
-        magnitude = self.filter_magnitude(magnitude, frame)
-        magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
-
-        self.append_to_mag_histogram(raw_frame.index, magnitude)
-
-        if visualize_as == "streamlines":
-
-            image_out = self.visualize_flow_as_streamlines(frame, flow)
-            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
-
-        elif visualize_as == "vectors":
-
-            image_out = self.visualize_flow_as_vectors(frame, magnitude, angle, vector_scalar=vector_scalar)
-            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
-
-        elif visualize_as == "hsv_overlay" or visualize_as == "hsv_stacked":
-
-            hsv_flow = self.visualize_flow_as_hsv(magnitude, angle, upper_mag_threshold)
-
-            if visualize_as == "hsv_overlay":
-                #  Crazy that I'm making two color conversion here
-                image_out = cv2.addWeighted(cv2.cvtColor(image1_gray, cv2.COLOR_GRAY2BGR), 0.1, hsv_flow, 0.9, 0)
-
-            elif visualize_as == "hsv_stacked":
-                image_out = np.concatenate((frame, hsv_flow), axis=0)
-            else:
-                logger.error('Visualization method not recognized.')
-
-            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
-
-        return image_out, frame_out
 
     def set_stream_dimensions(self, stream, visualize_as, height, width):
 
@@ -227,15 +162,17 @@ class video_source():
             os.makedirs(self.video_out_path)
 
         container_out = av.open(os.path.join(self.video_out_path, video_out_name), mode="w", timeout=None)
-        try:
-            subprocess.check_output('nvidia-smi')
-            #print('Nvidia GPU detected!')#
-            stream_out = container_out.add_stream("h264_nvenc", framerate=average_fps)
-        except Exception:  # this command not being found can raise quite a few different errors depending on the configuration
-            stream_out = container_out.add_stream("libx264", framerate=average_fps)
-            # print('No Nvidia GPU in system!  Defaulting to a different encoder')
+        stream_out = container_out.add_stream("libx264", framerate=average_fps)
 
-        stream_out.options["crf"] = "10"
+        # try:
+        #     subprocess.check_output('nvidia-smi')
+        #     #print('Nvidia GPU detected!')#
+        #     #stream_out = container_out.add_stream("h264_nvenc", framerate=average_fps)
+        # except Exception:  # this command not being found can raise quite a few different errors depending on the configuration
+        #     stream_out = container_out.add_stream("libx264", framerate=average_fps)
+        #     # print('No Nvidia GPU in system!  Defaulting to a different encoder')
+
+        stream_out.options["crf"] = "20"
         stream_out.pix_fmt = container_in.streams.video[0].pix_fmt
         stream_out.time_base = time_base
         stream_out = self.set_stream_dimensions(stream_out, visualize_as, height, width)
@@ -356,7 +293,7 @@ class video_source():
         container_out.close()
         container_in.close()
 
-        self.save_out_mag_histogram(self, algorithm, visualize_as)
+        # self.save_out_mag_histogram(algorithm, visualize_as)
 
     def append_to_mag_histogram(self, index, magnitude):
 
@@ -371,7 +308,6 @@ class video_source():
             # Calc cumulative avg flow magnitude by adding the first flow histogram in a weighted manner
             cumulative_mag_hist = np.divide(
                 np.sum([np.multiply((index - 1), self.cumulative_mag_hist), mag_hist[0]], axis=0), index - 1)
-
 
     def save_out_mag_histogram(self, algorithm,  visualize_as):
 
@@ -463,6 +399,93 @@ class video_source():
 
         return magnitude
 
+    @staticmethod
+    def filter_frame(frame):
+
+        thresh1, frame = cv2.threshold(frame, 50, 255, cv2.THRESH_TOZERO)
+
+        return frame
+
+    @staticmethod
+    def filter_magnitude(magnitude, frame):
+
+        image1_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # frame_out = cv2.bitwise_and(frame, frame, mask=cv2.threshold(image1_gray, 127, 255, cv2.THRESH_BINARY)[1])
+        _, mask = cv2.threshold(image1_gray, 50, 255, cv2.THRESH_BINARY)
+        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
+
+        return magnitude
+
+
+    def add_visualization(self,
+                          raw_frame,
+                          frame,
+                          visualize_as,
+                          upper_mag_threshold=False,
+                          lower_mag_threshold=False,
+                          mask=None,
+                          image1_gpu=None,
+                          image2_gpu=None,
+                          image1_gray=None,
+                          image2_gray=None,
+                          algo_supports_cuda=False,
+                          vector_scalar=1):
+
+        def flow_to_mag_angle(flow, lower_mag_threshold= False, upper_mag_threshold = False):
+            # Convert flow to mag / angle
+            magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+            angle = np.pi + angle
+            magnitude = self.filter_magnitude(magnitude, frame)
+            magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
+            return magnitude, angle
+
+        # if visualize_as in ['gaze_shifted_hsv']:
+        #     logger.exception('This visualization method is only available for pupil labs data folders')
+        image_out = False
+        frame_out = False
+
+        # Calculate flow
+        if algo_supports_cuda and self.cuda_enabled:
+            # With cuda
+            flow, image1_gray, image2_gpu = self.calculate_flow_for_frame(frame,
+                                                                          image2_gpu,
+                                                                          gpu1=image1_gpu,
+                                                                          use_cuda=True)
+        else:
+            # Without cuda
+            flow, image1_gray, image2_gray = self.calculate_flow_for_frame(frame,
+                                                                           image2_gray,
+                                                                           use_cuda=False)
+
+        magnitude, angle = flow_to_mag_angle(flow)
+
+        if visualize_as == "streamlines":
+
+            image_out = self.visualize_flow_as_streamlines(frame, flow)
+            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+
+        elif visualize_as == "vectors":
+
+            image_out = self.visualize_flow_as_vectors(frame, magnitude, angle, vector_scalar=vector_scalar)
+            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+
+        elif visualize_as == "hsv_overlay" or visualize_as == "hsv_stacked":
+
+            hsv_flow = self.visualize_flow_as_hsv(magnitude, angle, upper_mag_threshold)
+
+            if visualize_as == "hsv_overlay":
+                #  Crazy that I'm making two color conversion here
+                image_out = cv2.addWeighted(cv2.cvtColor(image1_gray, cv2.COLOR_GRAY2BGR), 0.1, hsv_flow, 0.9, 0)
+
+            elif visualize_as == "hsv_stacked":
+                image_out = np.concatenate((frame, hsv_flow), axis=0)
+            else:
+                logger.error('Visualization method not recognized.')
+
+            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+
+        return image_out, frame_out
+
     def visualize_flow_as_streamlines(self, frame, flow):
 
         # dbfile = open(os.path.join(self.video_out_path,"streamlines.pickle"), 'wb')
@@ -544,22 +567,6 @@ class video_source():
         return cv2.addWeighted(frame, 0.5, mask, 0.5, 0)
 
 
-    @staticmethod
-    def filter_frame(frame):
-
-        thresh1, frame = cv2.threshold(frame, 50, 255, cv2.THRESH_TOZERO)
-
-        return frame
-
-    @staticmethod
-    def filter_magnitude(magnitude, frame):
-
-        image1_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # frame_out = cv2.bitwise_and(frame, frame, mask=cv2.threshold(image1_gray, 127, 255, cv2.THRESH_BINARY)[1])
-        _, mask = cv2.threshold(image1_gray, 50, 255, cv2.THRESH_BINARY)
-        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
-
-        return magnitude
 
 
 class pupil_labs_source(video_source):
@@ -648,7 +655,7 @@ class pupil_labs_source(video_source):
 
         data = self.processed_gaze_data.loc[frame_index - 1]
 
-        if data['median_x'] == np.NAN or data['median_y'] == np.NAN:
+        if np.isnan(data['median_x']) or np.isnan(data['median_y']):
             return np.zeros((height, width, 3), np.uint8)
 
         median_x = data['median_x']
@@ -671,7 +678,6 @@ class pupil_labs_source(video_source):
         # remove padding
         new_image = new_image[ height:height*2, width:width*2,:]
 
-        cv2.imwrite('temp.png', new_image, [cv2.IMWRITE_PNG_COMPRESSION, 0])
         return new_image
 
     def draw_gaze_in_head(self, frame, frame_index):
@@ -823,27 +829,27 @@ if __name__ == "__main__":
     #a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
     #source = pupil_labs_source(a_file_path,recording_number='007')
 
-    a_file_path = os.path.join("pupil_labs_data", "cb1")
-    source = pupil_labs_source(a_file_path)
-    source.cuda_enabled = True
+    # a_file_path = os.path.join("pupil_labs_data", "cb1")
+    # source = pupil_labs_source(a_file_path)
+    # source.cuda_enabled = True
 
     # source.calculate_flow(algorithm='tvl1', visualize_as="hsv_overlay", lower_mag_threshold=False,
     #                       upper_mag_threshold=False,
     #                       vector_scalar=3, save_input_images=False, save_output_images=True)
 
-    source.calculate_flow(algorithm='tvl1', visualize_as="gaze-centered_hsv", lower_mag_threshold=False,
-                          upper_mag_threshold=False,
-                          vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=False)
-
+    # source.calculate_flow(algorithm='tvl1', visualize_as="hsv-overlay", lower_mag_threshold=False,
+    #                       upper_mag_threshold=False,
+    #                       vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=False)
 
 
     # a_file_path = os.path.join("videos", "cb1.mp4")
-    # # a_file_path = os.path.join("demo_input_video", "linear_travel.mp4")
     # a_file_path = os.path.join("videos", "tamer.mp4")
-    # source = video_source(a_file_path)
-    # source.cuda_enabled = True
-    # source.calculate_flow(algorithm='deepflow', visualize_as="hsv_overlay", lower_mag_threshold=False, upper_mag_threshold=5,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
+
+    a_file_path = os.path.join("demo_input_video", "linear_travel.mp4")
+    source = video_source(a_file_path)
+    source.cuda_enabled = True
+    source.calculate_flow(algorithm='tvl1', visualize_as="hsv_overlay", lower_mag_threshold=False, upper_mag_threshold=False,
+                          vector_scalar=3, save_input_images=False, save_output_images=False)
 
     #a_file_path = os.path.join("videos", "640_480_60Hz.mp4")
     # a_file_path = os.path.join("pupil_labs_data","GD-Short-Driving-Video","S001","PupilData","007","world.mp4")
