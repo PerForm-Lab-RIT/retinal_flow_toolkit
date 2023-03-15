@@ -72,6 +72,15 @@ class video_source():
 
             if not self.cuda_enabled:
                 self.flow_algo = cv2.optflow.createOptFlow_Farneback()
+                # self.flow_algo.setFastPyramids(False)
+                # self.flow_algo.setFlags(0)
+                self.flow_algo.setNumIters(10) #10
+                self.flow_algo.setNumLevels(25)
+                self.flow_algo.setPolyN(5) # 5
+                self.flow_algo.setPolySigma(1.1)
+                self.flow_algo.setPyrScale(10.5) # 0.5
+                self.flow_algo.setWinSize(3) # 13
+
             else:
                 algo_supports_cuda = True
                 self.flow_algo = cv2.cuda_FarnebackOpticalFlow.create()
@@ -94,6 +103,22 @@ class video_source():
             # self.flow_algo.setTau(0.5)
             # self.flow_algo.setGamma(0.5) # def 0
 
+        elif algorithm == "brox":
+
+            if not self.cuda_enabled:
+                logger.error('Non-cuda optical flow calculation not yet supported for ' + algorithm,
+                             stack_info=True, exc_info=True)
+                sys.exit(1)
+
+            algo_supports_cuda = True
+            self.flow_algo = cv2.cuda_BroxOpticalFlow.create()
+            # self.flow_algo.setFlowSmoothness() # def alpha 0.197
+            # self.flow_algo.setGradientConstancyImportance() # def gamma 0
+            # self.flow_algo.setInnerIterations() # def 5
+            # self.flow_algo.setOuterIterations() # def 150
+            self.flow_algo.setPyramidScaleFactor(5) # def 0
+            self.flow_algo.setSolverIterations(2) # def 0
+
         elif algorithm == "pyrLK":
 
             if not self.cuda_enabled:
@@ -103,9 +128,9 @@ class video_source():
 
             algo_supports_cuda = True
             self.flow_algo = cv2.cuda_DensePyrLKOpticalFlow.create()
-            self.flow_algo.setMaxLevel(10)  # default 3
-            self.flow_algo.setWinSize((3, 3))  # default 13, 13
-            # flow_algo.setNumIters(30) # 30 def
+            #self.flow_algo.setMaxLevel(6)  # default 3
+            self.flow_algo.setWinSize((25, 25))  # default 13, 13
+            #self.flow_algo.setNumIters(30) # 30 def
 
         elif algorithm == "nvidia1":
             algo_supports_cuda = True
@@ -123,6 +148,8 @@ class video_source():
                       'enableCostBuffer': True}
 
             self.flow_algo = cv2.cuda.NvidiaOpticalFlow_2_0_create((height_width[1], height_width[0]), **params)
+
+
 
         else:
             logger.error('Optical flow algorithm not implemented, or a typo', stack_info=True,exc_info=True)
@@ -189,19 +216,27 @@ class video_source():
             gpu1.upload(bgr)
             gpu1 = cv2.cuda.cvtColor(gpu1, cv2.COLOR_BGR2GRAY)
             gpu1 = self.clahe.apply(gpu1, cv2.cuda_Stream.Null())
-            flow = self.flow_algo.calc(gpu1, gray2, flow=None)
+
+            if type(self.flow_algo) == cv2.cuda.BroxOpticalFlow:
+                gpu1.upload(gpu1.download().astype('float32'))
+                gray2.upload(gray2.download().astype('float32'))
+
+                flow = self.flow_algo.calc(gpu1, gray2, None)
+            else:
+                flow = self.flow_algo.calc(gpu1, gray2, None)
             # move images from gpu to cpu
             image1_gray = gpu1.download()
             image2_gpu = gpu1.clone()
 
             if type(self.flow_algo) == cv2.cuda.NvidiaOpticalFlow_1_0:
                 flow = self.flow_algo.upSampler(flow[0],(bgr.shape[1],bgr.shape[0]), self.flow_algo.getGridSize(),None)
-                # self.flow_algo.collectGarbage()
 
             if type(self.flow_algo) == cv2.cuda.NvidiaOpticalFlow_2_0:
                 flow = self.flow_algo.convertToFloat(flow[0], None)
 
             flow = flow.download()
+            #self.flow_algo.collectGarbage()
+
 
 
             return flow, image1_gray, image2_gpu
@@ -417,20 +452,19 @@ class video_source():
         return magnitude
 
     @staticmethod
-    def filter_frame(frame):
-        thresh1, frame = cv2.threshold(frame, 50, 255, cv2.THRESH_TOZERO)
-        return frame
-
-    @staticmethod
     def filter_magnitude(magnitude, frame):
 
         image1_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         # frame_out = cv2.bitwise_and(frame, frame, mask=cv2.threshold(image1_gray, 127, 255, cv2.THRESH_BINARY)[1])
-        _, mask = cv2.threshold(image1_gray, 50, 255, cv2.THRESH_BINARY)
+        _, mask = cv2.threshold(image1_gray, 25, 255, cv2.THRESH_BINARY)
         magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
 
         return magnitude
 
+    @staticmethod
+    def filter_frame(frame):
+        thresh1, frame = cv2.threshold(frame, 25, 255, cv2.THRESH_TOZERO)
+        return frame
 
     def add_visualization(self,
                           raw_frame,
@@ -449,7 +483,7 @@ class video_source():
         def flow_to_mag_angle(index, flow, lower_mag_threshold= False, upper_mag_threshold = False):
             # Convert flow to mag / angle
             magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-            angle = np.pi + angle
+
             magnitude = self.filter_magnitude(magnitude, frame)
             self.append_to_mag_histogram(index, magnitude)
 
@@ -488,16 +522,23 @@ class video_source():
 
         elif visualize_as == "hsv_overlay" or visualize_as == "hsv_stacked":
 
-            hsv_flow = self.visualize_flow_as_hsv(magnitude, angle)
+            image_out = self.visualize_flow_as_hsv(magnitude, angle)
 
-            if visualize_as == "hsv_overlay":
+            # if visualize_as == "hsv_overlay":
                 #  Crazy that I'm making two color conversion here
-                image_out = cv2.addWeighted(cv2.cvtColor(image1_gray, cv2.COLOR_GRAY2BGR), 0.1, hsv_flow, 0.9, 0)
+                # image_out = cv2.addWeighted(cv2.cvtColor(image1_gray, cv2.COLOR_GRAY2BGR), 0.1, hsv_flow, 0.9, 0)
 
-            elif visualize_as == "hsv_stacked":
-                image_out = np.concatenate((frame, hsv_flow), axis=0)
-            else:
-                logger.error('Visualization method not recognized.')
+            if visualize_as == "hsv_stacked":
+                image_out = np.concatenate((frame, image_out), axis=0)
+            # else:
+            #     logger.error('Visualization method not recognized.')
+
+            # Save midpoint images?
+            if self.save_midpoint_images:
+                if os.path.isdir(self.mid_frames_out_path) is False:
+                    os.makedirs(self.mid_frames_out_path)
+                cv2.imwrite(str(os.path.join(self.mid_frames_out_path, '{:06d}.png'.format(raw_frame.index))),
+                            image_out, [cv2.IMWRITE_PNG_COMPRESSION, 0])
 
             frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
         else:
@@ -549,15 +590,21 @@ class video_source():
         # create hsv output for optical flow
         hsv = np.zeros([np.shape(magnitude)[0], np.shape(magnitude)[1], 3], np.uint8)
 
-        hsv[..., 0] = angle * 180 / np.pi / 2
+        # angle_degs = np.array(angle * (180 / np.pi))
+        # angle_degs = np.array(angle * (180 / np.pi))
+        # idx = np.where(angle_degs > 179)[0]
+        # angle_degs[idx] = np.mod((-180 + angle_degs[idx]), 179)
 
-        # set saturation to 1
+        # TODO:  Make sure the normalize functions here aren't complciating comparison across frames
+        # hsv[..., 0] = cv2.normalize(angle, None, 0, 179, cv2.NORM_MINMAX)
+
+        hsv[..., 0] = angle * 180 / np.pi / 4
         hsv[..., 1] = 255
-        hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX, -1)
+        hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
 
         hsv_8u = np.uint8(hsv)
-        return cv2.cvtColor(hsv_8u, cv2.COLOR_HSV2BGR)
 
+        return cv2.cvtColor(hsv_8u, cv2.COLOR_HSV2BGR)
 
     def visualize_flow_as_vectors(self, frame, magnitude, angle, divisor=15, vector_scalar=1):
 
@@ -827,12 +874,7 @@ class pupil_labs_source(video_source):
             image1_gpu = cv2.cuda.cvtColor(image1_gpu, cv2.COLOR_BGR2GRAY)
             image1_gpu = self.clahe.apply(image1_gpu, cv2.cuda_Stream.Null())
 
-        # Save midpoint images?
-        if self.save_midpoint_images:
-            if os.path.isdir(self.mid_frames_out_path) is False:
-                os.makedirs(self.mid_frames_out_path)
-            cv2.imwrite(str(os.path.join(self.mid_frames_out_path, '{:06d}.png'.format(raw_frame.index))),
-                        frame, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+
 
         if visualize_as == 'gaze-centered_hsv':
             visualize_as = 'hsv_overlay'
@@ -884,11 +926,11 @@ if __name__ == "__main__":
 
     a_file_path = os.path.join("demo_input_video", "linear_travel.mp4")
     source = video_source(a_file_path)
-    source.calculate_flow(algorithm='brox',
+    source.calculate_flow(algorithm='tvl1',
                           visualize_as="hsv_overlay",
-                          lower_mag_threshold=False,
-                          upper_mag_threshold=False,
-                          vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=False)
+                          lower_mag_threshold=0,
+                          upper_mag_threshold=25,
+                          vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=True)
 
     #
 
