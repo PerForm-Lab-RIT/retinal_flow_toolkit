@@ -30,6 +30,14 @@ logger = logging.getLogger(__name__)
 # These lines allow me to see logging.info messages in my jupyter cell output
 logger.addHandler(logging.StreamHandler(stream=sys.stdout))
 
+def show_image(image):
+
+    if type(image) == cv2.cuda_GpuMat:
+        image = image.download()
+
+    cv2.imshow('temp', image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 class video_source():
 
@@ -59,7 +67,7 @@ class video_source():
 
         self.streamline_points = None
 
-    def init_flow_object(self, algorithm, height_width=False):
+    def init_flow(self, algorithm, height_width=False):
 
         # Even if self.cuda_is_enabled=True, some algos don't support cuda!
         algo_supports_cuda = False
@@ -213,9 +221,12 @@ class video_source():
         # Calculate flow.  If possible, use cuda.
         if use_cuda:
             # self.temp_fun(frame,raw_frame)
+
             gpu1.upload(bgr)
             gpu1 = cv2.cuda.cvtColor(gpu1, cv2.COLOR_BGR2GRAY)
-            gpu1 = self.clahe.apply(gpu1, cv2.cuda_Stream.Null())
+
+            # gpu1 = self.clahe.apply(gpu1, cv2.cuda_Stream.Null())
+            # show_image(np.hstack([gpu1.download(), gray2.download()]))
 
             if type(self.flow_algo) == cv2.cuda.BroxOpticalFlow:
                 gpu1.upload(gpu1.download().astype('float32'))
@@ -224,6 +235,7 @@ class video_source():
                 flow = self.flow_algo.calc(gpu1, gray2, None)
             else:
                 flow = self.flow_algo.calc(gpu1, gray2, None)
+
             # move images from gpu to cpu
             image1_gray = gpu1.download()
             image2_gpu = gpu1.clone()
@@ -235,15 +247,11 @@ class video_source():
                 flow = self.flow_algo.convertToFloat(flow[0], None)
 
             flow = flow.download()
-            #self.flow_algo.collectGarbage()
-
-
-
             return flow, image1_gray, image2_gpu
 
         else:
             image1_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-            image1_gray = self.clahe.apply(image1_gray)
+            # image1_gray = self.clahe.apply(image1_gray)
             flow = self.flow_algo.calc(image1_gray, gray2, flow=None)
             image2_gray = image1_gray
 
@@ -286,18 +294,18 @@ class video_source():
         ##############################
         # Prepare for flow calculations
 
-        algo_supports_cuda = self.init_flow_object(algorithm, (stream_in.height, stream_in.width))
+        algo_supports_cuda = self.init_flow(algorithm, (stream_in.height, stream_in.width))
 
         if algo_supports_cuda and self.cuda_enabled:
             image1_gpu = cv2.cuda_GpuMat()
             image2_gpu = cv2.cuda_GpuMat()
             image2_gray = False
-            self.clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
+            # self.clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
 
         else:
             image1_gpu = False
             image2_gpu = False
-            self.clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
+            # self.clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
 
         world_index = 0
 
@@ -309,16 +317,16 @@ class video_source():
             if raw_frame.index == 0:
 
                 prev_frame = raw_frame.to_ndarray(format='bgr24')
-                prev_frame = self.filter_frame(prev_frame)
+                prev_frame = self.preprocess_frame(prev_frame)
 
                 # Apply histogram normalization.
                 if algo_supports_cuda and self.cuda_enabled:
                     image2_gpu.upload(prev_frame)
                     image2_gpu = cv2.cuda.cvtColor(image2_gpu, cv2.COLOR_BGR2GRAY)
-                    image2_gpu = self.clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
+                    # image2_gpu = self.clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
                 else:
                     image2_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-                    image2_gray = self.clahe.apply(image2_gray)
+                    # image2_gray = self.clahe.apply(image2_gray)
 
                 # Save input images?
                 if save_input_images:
@@ -339,8 +347,7 @@ class video_source():
                 # Frames>0
                 frame = raw_frame.to_ndarray(format='bgr24')
                 # self.modify_frame(frame, raw_frame.index)
-                frame = self.filter_frame(frame)
-
+                frame = self.preprocess_frame(frame)
 
             frame_out = raw_frame
             image_out = frame
@@ -355,7 +362,6 @@ class video_source():
                                                                        image2_gray=image2_gray,
                                                                        algo_supports_cuda=algo_supports_cuda,
                                                                        vector_scalar=vector_scalar)
-
 
             # Save input images?
             if save_input_images:
@@ -379,7 +385,7 @@ class video_source():
             world_index = world_index + 1
 
         # Flush stream
-        encode_frame(container_out, stream_out, frame_out, raw_frame, stream_in, flush = True)
+        encode_frame(container_out, stream_out, frame_out, raw_frame, stream_in, flush=True)
 
         # Close the file
         container_out.close()
@@ -437,33 +443,39 @@ class video_source():
 
         plt.savefig(mag_image_fileloc)
 
+    @staticmethod
+    def filter_magnitude(magnitude, frame):
+
+        # image1_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _, mask = cv2.threshold(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 50, 255, cv2.THRESH_TOZERO)
+        # frame_out = cv2.bitwise_and(frame, frame, mask=cv2.threshold(image1_gray, 127, 255, cv2.THRESH_BINARY)[1])
+        # _, mask = cv2.threshold(image1_gray, 25, 255, cv2.THRESH_BINARY)
+
+        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
+
+        return magnitude
+
     def apply_magnitude_thresholds_and_rescale(self, magnitude, lower_mag_threshold=False, upper_mag_threshold=False):
 
+        #magnitude = np.clip(magnitude, lower_mag_threshold, upper_mag_threshold)
+
         if lower_mag_threshold:
-            magnitude[magnitude < lower_mag_threshold] = 0
+            magnitude[magnitude < lower_mag_threshold] = lower_mag_threshold
 
         if upper_mag_threshold:
             magnitude[magnitude > upper_mag_threshold] = upper_mag_threshold
 
-        magnitude = cv2.normalize(magnitude, None, 0, np.nanmax(magnitude), cv2.NORM_MINMAX, -1)
-
+        magnitude = ((magnitude - lower_mag_threshold) / (upper_mag_threshold - lower_mag_threshold)) * 255.0
+        # magnitude = cv2.normalize(magnitude, None, 0, np.nanmax(magnitude), cv2.NORM_MINMAX, -1)
         # magnitude = np.nan_to_num(magnitude) #nans set to 0, inf set to np.max(magnitude)
 
         return magnitude
 
     @staticmethod
-    def filter_magnitude(magnitude, frame):
-
-        image1_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # frame_out = cv2.bitwise_and(frame, frame, mask=cv2.threshold(image1_gray, 127, 255, cv2.THRESH_BINARY)[1])
-        _, mask = cv2.threshold(image1_gray, 25, 255, cv2.THRESH_BINARY)
-        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
-
-        return magnitude
-
-    @staticmethod
-    def filter_frame(frame):
-        thresh1, frame = cv2.threshold(frame, 25, 255, cv2.THRESH_TOZERO)
+    def preprocess_frame(frame):
+        # thresh1, frame = cv2.threshold(frame, 25, 255, cv2.THRESH_TOZERO)
+        _, mask = cv2.threshold(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 30, 250, cv2.THRESH_TOZERO)
+        frame = cv2.bitwise_and(frame, frame, mask=mask)
         return frame
 
     def add_visualization(self,
@@ -484,11 +496,11 @@ class video_source():
             # Convert flow to mag / angle
             magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
 
-            magnitude = self.filter_magnitude(magnitude, frame)
-            self.append_to_mag_histogram(index, magnitude)
-
+            magnitude = self.filter_magnitude(magnitude, frame) # 29.6,
+            self.append_to_mag_histogram(index, magnitude) # 7.3
             magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
-            return magnitude, angle
+
+            return magnitude, angle #  56.205658
 
         # if visualize_as in ['gaze_shifted_hsv']:
         #     logger.exception('This visualization method is only available for pupil labs data folders')
@@ -540,6 +552,7 @@ class video_source():
                 cv2.imwrite(str(os.path.join(self.mid_frames_out_path, '{:06d}.png'.format(raw_frame.index))),
                             image_out, [cv2.IMWRITE_PNG_COMPRESSION, 0])
 
+            show_image(image_out)
             frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
         else:
             logger.error('Visualization method not implemented, or a typo', stack_info=True, exc_info=True)
@@ -595,16 +608,17 @@ class video_source():
         # idx = np.where(angle_degs > 179)[0]
         # angle_degs[idx] = np.mod((-180 + angle_degs[idx]), 179)
 
-        # TODO:  Make sure the normalize functions here aren't complciating comparison across frames
+        # TODO:  Make sure the normalize functions here aren't complicating comparison across frames
         # hsv[..., 0] = cv2.normalize(angle, None, 0, 179, cv2.NORM_MINMAX)
 
-        hsv[..., 0] = angle * 180 / np.pi / 4
+        hsv[..., 0] = angle * 180 / np.pi / 2
         hsv[..., 1] = 255
         hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
 
         hsv_8u = np.uint8(hsv)
+        bgr = cv2.cvtColor(hsv_8u, cv2.COLOR_HSV2BGR)
 
-        return cv2.cvtColor(hsv_8u, cv2.COLOR_HSV2BGR)
+        return bgr
 
     def visualize_flow_as_vectors(self, frame, magnitude, angle, divisor=15, vector_scalar=1):
 
@@ -926,10 +940,10 @@ if __name__ == "__main__":
 
     a_file_path = os.path.join("demo_input_video", "linear_travel.mp4")
     source = video_source(a_file_path)
-    source.calculate_flow(algorithm='tvl1',
+    source.calculate_flow(algorithm='nvidia2',
                           visualize_as="hsv_overlay",
                           lower_mag_threshold=0,
-                          upper_mag_threshold=25,
+                          upper_mag_threshold=30,
                           vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=True)
 
     #

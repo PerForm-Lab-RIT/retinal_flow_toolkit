@@ -29,14 +29,14 @@ logger.addHandler(logging.StreamHandler(stream=sys.stdout))
 
 ###############################
 
-#file_name = "linear_travel.mp4"
-file_name = "curved_path.mp4"
+file_name = "linear_travel.mp4"
+#file_name = "dash_cam.mp4"
 file_prefix = file_name.split('.')[0]
 
 a_file_path = os.path.join("demo_input_video", file_name)
-lower_mag_threshold = 5
-upper_mag_threshold = 25
-algorithm= 'tvl1'
+lower_mag_threshold = 0
+upper_mag_threshold = 30
+algorithm= 'nvidia2'
 visualize_as = 'hsv_overlay'
 scale = 1
 
@@ -46,6 +46,12 @@ from matplotlib import use as mpl_use
 hist_params = (100, 0, 40)
 cumulative_mag_hist = None
 magnitude_bins = None
+
+def show_image(image):
+
+    cv2.imshow('temp', image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
 ###############################
 def save_hist(cumulative_mag_hist, magnitude_bins, out_path):
@@ -59,6 +65,9 @@ def save_hist(cumulative_mag_hist, magnitude_bins, out_path):
     # ax.set_title('flow magnitude')
     ax.set_xlabel('vector length')
     ax.set_ylabel('likelihood')
+
+    if os.path.isdir(out_path) is False:
+        os.makedirs(out_path)
 
     plt.savefig(os.path.join(out_path, 'mag_hist'))
 
@@ -82,6 +91,9 @@ def append_to_mag_histogram(index, magnitude, cumulative_mag_hist):
 video_out_path = os.path.join("flow_out", file_prefix)
 video_out_name = file_prefix + '_' + algorithm + '_' + visualize_as + '_script.mp4'
 
+if os.path.isdir(video_out_path) is False:
+    os.makedirs(video_out_path)
+
 image1_gpu = cv2.cuda_GpuMat()
 image2_gpu = cv2.cuda_GpuMat()
 
@@ -90,17 +102,15 @@ ret, first_frame = cap.read()
 
 clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(7, 7))
 
-# hsv = np.zeros_like(first_frame)
-# hsv[..., 1] = 255
+_, mask = cv2.threshold(cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY), 30, 255, cv2.THRESH_TOZERO)
+first_frame = cv2.bitwise_and(first_frame, first_frame, mask=mask)
 
-thresh1, first_frame = cv2.threshold(first_frame, 100, 255, cv2.THRESH_TOZERO)
 image2_gpu.upload(first_frame)
 rescaled_size = (int(image2_gpu.size()[0]*scale), int(image2_gpu.size()[1]*scale))
 
 # image2_gpu = cv2.cuda.pyrUp(image2_gpu)
 image2_gpu = cv2.cuda.resize(image2_gpu, rescaled_size, interpolation=cv2.INTER_AREA)
 image2_gpu = cv2.cuda.cvtColor(image2_gpu, cv2.COLOR_BGR2GRAY)
-# image2_gpu = clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
 
 width = image2_gpu.size()[0]
 height = image2_gpu.size()[1]
@@ -136,21 +146,17 @@ for i in tqdm(range(1, num_frames), desc="Generating " + vid_out_full_path, unit
     if not success:
         continue
 
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    # STOPPED HERE
-
-    cv2.imshow('temp', hsv)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-
-    _, mask = cv2.threshold(gray, 50, 150, cv2.THRESH_BINARY)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 30, 255, cv2.THRESH_TOZERO)
     frame = cv2.bitwise_and(frame, frame, mask=mask)
-
 
     # thresh1, frame = cv2.threshold(frame, 100, 255, cv2.THRESH_TOZERO)
 
     image1_gpu.upload(frame)
-    image1_gpu = cv2.cuda.resize(image1_gpu, rescaled_size, interpolation=cv2.INTER_AREA)
+
+    if rescaled_size != 1:
+        image1_gpu = cv2.cuda.resize(image1_gpu, rescaled_size, interpolation=cv2.INTER_AREA)
+
     image1_gpu = cv2.cuda.cvtColor(image1_gpu, cv2.COLOR_BGR2GRAY)
     # image1_gpu = clahe.apply(image1_gpu, cv2.cuda_Stream.Null())
     flow = flow_algo.calc(image1_gpu, image2_gpu, None)
@@ -165,7 +171,7 @@ for i in tqdm(range(1, num_frames), desc="Generating " + vid_out_full_path, unit
 
     magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
 
-    cumulative_mag_hist, magnitude_bins = append_to_mag_histogram(i, magnitude, cumulative_mag_hist)
+    cumulative_mag_hist, magnitude_bins = append_to_mag_histogram(i, magnitude, cumulative_mag_hist) # 29.6
 
     image1_gray = image1_gpu.download()
 
@@ -173,7 +179,8 @@ for i in tqdm(range(1, num_frames), desc="Generating " + vid_out_full_path, unit
     magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
 
     # magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
-    if lower_mag_threshold:
+    # magnitude = np.clip(magnitude, lower_mag_threshold, upper_mag_threshold)
+    if lower_mag_threshold: # 7.3
         magnitude[magnitude < lower_mag_threshold] = lower_mag_threshold
 
     if upper_mag_threshold:
@@ -188,6 +195,7 @@ for i in tqdm(range(1, num_frames), desc="Generating " + vid_out_full_path, unit
     hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
 
     bgr = cv2.cvtColor(np.uint8(hsv), cv2.COLOR_HSV2BGR)
+    show_image(bgr)
     video_out.write(bgr)
     image2_gpu = image1_gpu.clone()
 
