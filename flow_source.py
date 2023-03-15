@@ -67,6 +67,9 @@ class video_source():
 
         self.streamline_points = None
 
+        self.current_gpu = False
+        self.previous_gpu = False
+
     def init_flow(self, algorithm, height_width=False):
 
         # Even if self.cuda_is_enabled=True, some algos don't support cuda!
@@ -216,46 +219,88 @@ class video_source():
 
         return container_in, container_in.streams.video[0], container_out, stream_out
 
-    def calculate_flow_for_frame(self, bgr, gray2, use_cuda, gpu1 = False):
+    def calculate_flow_for_frame_cuda(self):
 
-        # Calculate flow.  If possible, use cuda.
-        if use_cuda:
-            # self.temp_fun(frame,raw_frame)
-
-            gpu1.upload(bgr)
-            gpu1 = cv2.cuda.cvtColor(gpu1, cv2.COLOR_BGR2GRAY)
-
-            # gpu1 = self.clahe.apply(gpu1, cv2.cuda_Stream.Null())
-            # show_image(np.hstack([gpu1.download(), gray2.download()]))
-
-            if type(self.flow_algo) == cv2.cuda.BroxOpticalFlow:
-                gpu1.upload(gpu1.download().astype('float32'))
-                gray2.upload(gray2.download().astype('float32'))
-
-                flow = self.flow_algo.calc(gpu1, gray2, None)
-            else:
-                flow = self.flow_algo.calc(gpu1, gray2, None)
-
-            # move images from gpu to cpu
-            image1_gray = gpu1.download()
-            image2_gpu = gpu1.clone()
-
-            if type(self.flow_algo) == cv2.cuda.NvidiaOpticalFlow_1_0:
-                flow = self.flow_algo.upSampler(flow[0],(bgr.shape[1],bgr.shape[0]), self.flow_algo.getGridSize(),None)
-
-            if type(self.flow_algo) == cv2.cuda.NvidiaOpticalFlow_2_0:
-                flow = self.flow_algo.convertToFloat(flow[0], None)
-
-            flow = flow.download()
-            return flow, image1_gray, image2_gpu
+        if type(self.flow_algo) == cv2.cuda.BroxOpticalFlow:
+           self.current_gpu.upload(self.current_gpu.download().astype('float32'))
+           self.previous_gpu.upload(self.previous_gpu.download().astype('float32'))
+           flow = self.flow_algo.calc(self.current_gpu, self.previous_gpu, None)
 
         else:
-            image1_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-            # image1_gray = self.clahe.apply(image1_gray)
-            flow = self.flow_algo.calc(image1_gray, gray2, flow=None)
-            image2_gray = image1_gray
+            flow = self.flow_algo.calc(self.current_gpu, self.previous_gpu, None)
 
-            return flow, image1_gray, image2_gray
+        if type(self.flow_algo) == cv2.cuda.NvidiaOpticalFlow_1_0:
+            flow = self.flow_algo.upSampler(flow[0],(self.current_gpu.shape[1],self.current_gpu.shape[0]), self.flow_algo.getGridSize(),None)
+
+        if type(self.flow_algo) == cv2.cuda.NvidiaOpticalFlow_2_0:
+            flow = self.flow_algo.convertToFloat(flow[0], None)
+
+        flow = flow.download()
+
+        return flow
+
+    # def calculate_flow_for_frame(self, bgr, gray2, use_cuda, gpu1 = False):
+    #
+    #     # Calculate flow.  If possible, use cuda.
+    #     if use_cuda:
+    #         # self.temp_fun(frame,raw_frame)
+    #
+    #         gpu1.upload(bgr)
+    #         gpu1 = cv2.cuda.cvtColor(gpu1, cv2.COLOR_BGR2GRAY)
+    #
+    #         # gpu1 = self.clahe.apply(gpu1, cv2.cuda_Stream.Null())
+    #         # show_image(np.hstack([gpu1.download(), gray2.download()]))
+    #
+    #         if type(self.flow_algo) == cv2.cuda.BroxOpticalFlow:
+    #             gpu1.upload(gpu1.download().astype('float32'))
+    #             gray2.upload(gray2.download().astype('float32'))
+    #
+    #             flow = self.flow_algo.calc(gpu1, gray2, None)
+    #         else:
+    #             flow = self.flow_algo.calc(gpu1, gray2, None)
+    #
+    #         # move images from gpu to cpu
+    #         image1_gray = gpu1.download()
+    #         gpu1.release()
+    #         gray2.release()
+    #         #self.previous_gpu = gpu1.clone()
+    #        self.previous_gpu = cv2.cuda_GpuMat()
+    #        self.previous_gpu.upload(image1_gray)
+    #
+    #         if type(self.flow_algo) == cv2.cuda.NvidiaOpticalFlow_1_0:
+    #             flow = self.flow_algo.upSampler(flow[0],(bgr.shape[1],bgr.shape[0]), self.flow_algo.getGridSize(),None)
+    #
+    #         if type(self.flow_algo) == cv2.cuda.NvidiaOpticalFlow_2_0:
+    #             flow = self.flow_algo.convertToFloat(flow[0], None)
+    #
+    #         flow = flow.download()
+    #         return flow, image1_gray,self.previous_gpu
+    #
+    #     else:
+    #         image1_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    #         # image1_gray = self.clahe.apply(image1_gray)
+    #         flow = self.flow_algo.calc(image1_gray, gray2, flow=None)
+    #         image2_gray = image1_gray
+    #
+    #         return flow, image1_gray, image2_gray
+
+    def encode_frame(self, c_out, s_out, image_out, rawframe_in, s_in, flush = False):
+
+        frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+        frame_out.time_base = rawframe_in.time_base
+        frame_out.pts = rawframe_in.pts
+
+        if flush:
+            for packet_out in s_out.encode():
+                c_out.mux(packet_out)
+
+        else:
+
+            for packet_out in s_out.encode(frame_out):
+                packet_out.stream = s_out
+                packet_out.time_base = s_in.time_base
+                packet_out.pts = rawframe_in.pts
+                c_out.mux(packet_out)
 
     def calculate_flow(self, video_out_name=False, algorithm="tvl1", visualize_as="hsv_stacked",
                        vector_scalar=1,
@@ -265,23 +310,6 @@ class video_source():
                        save_midpoint_images=False,
                        save_output_images=False):
 
-        def encode_frame(c_out, s_out, frame_out, rawframe_in, s_in, flush = False):
-
-            frame_out.time_base = rawframe_in.time_base
-            frame_out.pts = rawframe_in.pts
-
-            if flush is True:
-                for packet_out in s_out.encode():
-                    # packet_out.stream = s_out
-                    # packet_out.time_base = s_in.time_base
-                    c_out.mux(packet_out)
-            else:
-                for packet_out in s_out.encode(frame_out):
-                    packet_out.stream = s_out
-                    packet_out.time_base = s_in.time_base
-                    packet_out.pts = rawframe_in.pts
-                    # # packet_out.dts = rawframe_in.dts
-                    c_out.mux(packet_out)
 
         self.save_midpoint_images = save_midpoint_images
 
@@ -297,17 +325,15 @@ class video_source():
         algo_supports_cuda = self.init_flow(algorithm, (stream_in.height, stream_in.width))
 
         if algo_supports_cuda and self.cuda_enabled:
-            image1_gpu = cv2.cuda_GpuMat()
-            image2_gpu = cv2.cuda_GpuMat()
-            image2_gray = False
-            # self.clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
+           self.current_gpu = cv2.cuda_GpuMat()
+           self.previous_gpu = cv2.cuda_GpuMat()
+           image2_gray = False
+           # self.clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
 
         else:
-            image1_gpu = False
-            image2_gpu = False
+           self.current_gpu = False
+           self.previous_gpu = False
             # self.clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
-
-        world_index = 0
 
         ##############################
         # Iterate through frames
@@ -321,9 +347,9 @@ class video_source():
 
                 # Apply histogram normalization.
                 if algo_supports_cuda and self.cuda_enabled:
-                    image2_gpu.upload(prev_frame)
-                    image2_gpu = cv2.cuda.cvtColor(image2_gpu, cv2.COLOR_BGR2GRAY)
-                    # image2_gpu = self.clahe.apply(image2_gpu, cv2.cuda_Stream.Null())
+                   self.previous_gpu.upload(prev_frame)
+                   self.previous_gpu = cv2.cuda.cvtColor(self.previous_gpu, cv2.COLOR_BGR2GRAY)
+                   #self.previous_gpu = self.clahe.apply(previous_gpu, cv2.cuda_Stream.Null())
                 else:
                     image2_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
                     # image2_gray = self.clahe.apply(image2_gray)
@@ -335,40 +361,35 @@ class video_source():
                     raw_frame.to_image().save(
                         os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
 
-                # prev_raw_frame = raw_frame
-
                 # Write out a blank first frame
-                frame_out = np.zeros([raw_frame.height, raw_frame.width, 3], dtype=np.uint8)
-                frame_out = av.VideoFrame.from_ndarray(frame_out, format='bgr24')
+                image_out = np.zeros([raw_frame.height, raw_frame.width, 3], dtype=np.uint8)
 
-                encode_frame(container_out, stream_out, frame_out, raw_frame, stream_in)
+                self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in)
                 continue
-            else:
-                # Frames>0
-                frame = raw_frame.to_ndarray(format='bgr24')
-                # self.modify_frame(frame, raw_frame.index)
-                frame = self.preprocess_frame(frame)
 
-            frame_out = raw_frame
-            image_out = frame
-            # Calculate flow and visualize
-            image_out, frame_out, image1_gray = self.add_visualization(raw_frame,
-                                                                       frame,
-                                                                       visualize_as,
-                                                                       lower_mag_threshold=lower_mag_threshold,
-                                                                       upper_mag_threshold = upper_mag_threshold,
-                                                                       image1_gpu=image1_gpu,
-                                                                       image2_gpu=image2_gpu,
-                                                                       image2_gray=image2_gray,
-                                                                       algo_supports_cuda=algo_supports_cuda,
-                                                                       vector_scalar=vector_scalar)
+            else:
+                frame_ndarray = raw_frame.to_ndarray(format='bgr24')
+                current_processed = self.preprocess_frame(frame_ndarray)
+
+            if algo_supports_cuda and self.cuda_enabled:
+                self.current_gpu.upload(current_processed)
+                self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
+                image_out = self.add_visualization_cuda(raw_frame.index,
+                                                        frame_ndarray,
+                                                        visualize_as,
+                                                        lower_mag_threshold=lower_mag_threshold,
+                                                        upper_mag_threshold=upper_mag_threshold)
+
+            # Add packet to video
+            self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in)
+            self.previous_gpu = self.current_gpu.clone()
 
             # Save input images?
             if save_input_images:
                 if os.path.isdir(self.raw_frames_out_path) is False:
                     os.makedirs(self.raw_frames_out_path)
-                raw_frame.to_image().save(
-                    os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
+                cv2.imwrite(str(os.path.join(self.raw_frames_out_path, 'frame-{}.png'.format(raw_frame.index))),
+                            frame_ndarray)
 
             # Save output images?
             if save_output_images:
@@ -377,15 +398,8 @@ class video_source():
                 cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(raw_frame.index))),
                             image_out)
 
-            # Add packet to video
-            encode_frame(container_out, stream_out, frame_out, raw_frame, stream_in)
-
-            # prev_raw_frame = raw_frame
-            image2_gray = image1_gray
-            world_index = world_index + 1
-
         # Flush stream
-        encode_frame(container_out, stream_out, frame_out, raw_frame, stream_in, flush=True)
+        self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in, flush=True)
 
         # Close the file
         container_out.close()
@@ -443,14 +457,14 @@ class video_source():
 
         plt.savefig(mag_image_fileloc)
 
-    @staticmethod
-    def filter_magnitude(magnitude, frame):
+    def filter_magnitude(self, magnitude, current_frame):
 
-        # image1_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        _, mask = cv2.threshold(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 50, 255, cv2.THRESH_TOZERO)
-        # frame_out = cv2.bitwise_and(frame, frame, mask=cv2.threshold(image1_gray, 127, 255, cv2.THRESH_BINARY)[1])
-        # _, mask = cv2.threshold(image1_gray, 25, 255, cv2.THRESH_BINARY)
+        if self.cuda_enabled:
+            current_gray = self.current_gpu.download()
+        else:
+            current_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
 
+        _, mask = cv2.cuda.threshold(current_gray, 50, 255, cv2.THRESH_TOZERO)
         magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
 
         return magnitude
@@ -478,59 +492,38 @@ class video_source():
         frame = cv2.bitwise_and(frame, frame, mask=mask)
         return frame
 
-    def add_visualization(self,
-                          raw_frame,
-                          frame,
-                          visualize_as,
-                          upper_mag_threshold=False,
-                          lower_mag_threshold=False,
-                          mask=None,
-                          image1_gpu=None,
-                          image2_gpu=None,
-                          image1_gray=None,
-                          image2_gray=None,
-                          algo_supports_cuda=False,
-                          vector_scalar=1):
+    def add_visualization_cuda(self,
+                               index,
+                               current_frame,
+                               visualize_as,
+                               upper_mag_threshold=False,
+                               lower_mag_threshold=False,
+                               vector_scalar=1):
 
         def flow_to_mag_angle(index, flow, lower_mag_threshold= False, upper_mag_threshold = False):
             # Convert flow to mag / angle
             magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-
-            magnitude = self.filter_magnitude(magnitude, frame) # 29.6,
+            magnitude = self.filter_magnitude(magnitude, current_frame) # 29.6,
             self.append_to_mag_histogram(index, magnitude) # 7.3
-            magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
+            magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude,
+                                                                    lower_mag_threshold=lower_mag_threshold,
+                                                                    upper_mag_threshold=upper_mag_threshold)
 
-            return magnitude, angle #  56.205658
+            return magnitude, angle
 
-        # if visualize_as in ['gaze_shifted_hsv']:
-        #     logger.exception('This visualization method is only available for pupil labs data folders')
-        image_out = False
-        frame_out = False
-
-        # Calculate flow
-        if algo_supports_cuda and self.cuda_enabled:
-            # With cuda
-            flow, image1_gray, image2_gpu = self.calculate_flow_for_frame(frame,
-                                                                          image2_gpu,
-                                                                          gpu1=image1_gpu,
-                                                                          use_cuda=True)
-        else:
-            # Without cuda
-            flow, image1_gray, image2_gray = self.calculate_flow_for_frame(frame,
-                                                                           image2_gray,
-                                                                           use_cuda=False)
-
-        magnitude, angle = flow_to_mag_angle(raw_frame.index, flow, lower_mag_threshold, upper_mag_threshold )
+        flow = self.calculate_flow_for_frame_cuda()
+        magnitude, angle = flow_to_mag_angle(index,
+                                             flow,
+                                             lower_mag_threshold=lower_mag_threshold,
+                                             upper_mag_threshold=upper_mag_threshold )
 
         if visualize_as == "streamlines":
 
-            image_out = self.visualize_flow_as_streamlines(frame, flow)
-            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+            image_out = self.visualize_flow_as_streamlines(current_frame, flow)
 
         elif visualize_as == "vectors":
 
-            image_out = self.visualize_flow_as_vectors(frame, magnitude, angle, vector_scalar=vector_scalar)
-            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+            image_out = self.visualize_flow_as_vectors(current_frame, magnitude, angle, vector_scalar=vector_scalar)
 
         elif visualize_as == "hsv_overlay" or visualize_as == "hsv_stacked":
 
@@ -541,7 +534,7 @@ class video_source():
                 # image_out = cv2.addWeighted(cv2.cvtColor(image1_gray, cv2.COLOR_GRAY2BGR), 0.1, hsv_flow, 0.9, 0)
 
             if visualize_as == "hsv_stacked":
-                image_out = np.concatenate((frame, image_out), axis=0)
+                image_out = np.concatenate((current_frame, image_out), axis=0)
             # else:
             #     logger.error('Visualization method not recognized.')
 
@@ -549,15 +542,99 @@ class video_source():
             if self.save_midpoint_images:
                 if os.path.isdir(self.mid_frames_out_path) is False:
                     os.makedirs(self.mid_frames_out_path)
-                cv2.imwrite(str(os.path.join(self.mid_frames_out_path, '{:06d}.png'.format(raw_frame.index))),
+                cv2.imwrite(str(os.path.join(self.mid_frames_out_path, '{:06d}.png'.format(index))),
                             image_out, [cv2.IMWRITE_PNG_COMPRESSION, 0])
 
-            show_image(image_out)
-            frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
         else:
             logger.error('Visualization method not implemented, or a typo', stack_info=True, exc_info=True)
 
-        return image_out, frame_out, image1_gray
+        return image_out
+
+    # def add_visualization(self,
+    #                       raw_frame,
+    #                       frame,
+    #                       visualize_as,
+    #                       upper_mag_threshold=False,
+    #                       lower_mag_threshold=False,
+    #                       mask=None,
+    #                       self.current_gpu=None,
+    #                       self.previous_gpu=None,
+    #                       image1_gray=None,
+    #                       image2_gray=None,
+    #                       algo_supports_cuda=False,
+    #                       vector_scalar=1):
+    #
+    #     def flow_to_mag_angle(index, flow, lower_mag_threshold= False, upper_mag_threshold = False):
+    #         # Convert flow to mag / angle
+    #         magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    #
+    #         magnitude = self.filter_magnitude(magnitude, frame) # 29.6,
+    #         self.append_to_mag_histogram(index, magnitude) # 7.3
+    #         magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude, lower_mag_threshold, upper_mag_threshold)
+    #
+    #         print(np.mean(magnitude))
+    #         # 56.205658
+    #         # 85.75194
+    #         # 105.92056
+    #         return magnitude, angle
+    #
+    #
+    #     # if visualize_as in ['gaze_shifted_hsv']:
+    #     #     logger.exception('This visualization method is only available for pupil labs data folders')
+    #     image_out = False
+    #     frame_out = False
+    #
+    #     # Calculate flow
+    #     if algo_supports_cuda and self.cuda_enabled:
+    #         # With cuda
+    #         flow, image1_gray,self.previous_gpu = self.calculate_flow_for_frame(frame,
+    #                                                                      self.previous_gpu,
+    #                                                                       gpu1=current_gpu,
+    #                                                                       use_cuda=True)
+    #     else:
+    #         # Without cuda
+    #         flow, image1_gray, image2_gray = self.calculate_flow_for_frame(frame,
+    #                                                                        image2_gray,
+    #                                                                        use_cuda=False)
+    #
+    #     magnitude, angle = flow_to_mag_angle(raw_frame.index, flow, lower_mag_threshold, upper_mag_threshold )
+    #
+    #     if visualize_as == "streamlines":
+    #
+    #         image_out = self.visualize_flow_as_streamlines(frame, flow)
+    #         frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+    #
+    #     elif visualize_as == "vectors":
+    #
+    #         image_out = self.visualize_flow_as_vectors(frame, magnitude, angle, vector_scalar=vector_scalar)
+    #         frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+    #
+    #     elif visualize_as == "hsv_overlay" or visualize_as == "hsv_stacked":
+    #
+    #         image_out = self.visualize_flow_as_hsv(magnitude, angle)
+    #
+    #         # if visualize_as == "hsv_overlay":
+    #             #  Crazy that I'm making two color conversion here
+    #             # image_out = cv2.addWeighted(cv2.cvtColor(image1_gray, cv2.COLOR_GRAY2BGR), 0.1, hsv_flow, 0.9, 0)
+    #
+    #         if visualize_as == "hsv_stacked":
+    #             image_out = np.concatenate((frame, image_out), axis=0)
+    #         # else:
+    #         #     logger.error('Visualization method not recognized.')
+    #
+    #         # Save midpoint images?
+    #         if self.save_midpoint_images:
+    #             if os.path.isdir(self.mid_frames_out_path) is False:
+    #                 os.makedirs(self.mid_frames_out_path)
+    #             cv2.imwrite(str(os.path.join(self.mid_frames_out_path, '{:06d}.png'.format(raw_frame.index))),
+    #                         image_out, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+    #
+    #
+    #         frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
+    #     else:
+    #         logger.error('Visualization method not implemented, or a typo', stack_info=True, exc_info=True)
+    #
+    #     return image_out, frame_out, image1_gray
 
     def visualize_flow_as_streamlines(self, frame, flow):
 
@@ -649,278 +726,278 @@ class video_source():
 
 
 
-class pupil_labs_source(video_source):
-
-    def __init__(self, pupil_labs_parent_folder,
-                 session_number=False,
-                 recording_number=False,
-                 export_number=False,
-                 analysis_parameters_file='default_analysis_parameters.json'):
-
-        self.analysis_parameters = json.load(open(analysis_parameters_file))
-
-        self.pupil_labs_parent_folder = pupil_labs_parent_folder
-
-        self.session_number = session_number
-        self.recording_number = recording_number
-        self.export_number = export_number
-
-        self.recording_folder = self.set_recording_folder()
-        self.export_folder = self.set_export_folder()
-
-        self.world_video_path = os.path.join(self.recording_folder, 'world.mp4')
-
-        self.gaze_data = False
-        self.processed_gaze_data = False
-
-        super().__init__(self.world_video_path, out_parent_dir=self.export_folder)
-
-        self.raw_frames_out_path = os.path.join(self.out_parent_dir, 'world_images')
-        self.mid_frames_out_path = os.path.join(self.out_parent_dir, 'flow_mid_images')
-        self.flow_frames_out_path = os.path.join(self.out_parent_dir, 'flow_images')
-        self.video_out_path = self.out_parent_dir
-        self.magnitude_out_path = os.path.join(self.out_parent_dir, 'flow_magnitude_data')
-
-        f = open(os.path.join(self.recording_folder, 'info.player.json'))
-        self.player_info = json.load(f)
-        f.close()
-
-    def calculate_flow(self, video_out_name=False, algorithm="tvl1", visualize_as="hsv_stacked",
-                       vector_scalar=1,
-                       lower_mag_threshold=False,
-                       upper_mag_threshold=False,
-                       save_input_images=False,
-                       save_midpoint_images=False,
-                       save_output_images=False):
-
-        if "gaze-centered" in visualize_as and not self.gaze_data:
-            self.import_gaze_from_exports()
-            self.process_gaze_data()
-
-        super().calculate_flow( video_out_name=video_out_name,
-                                algorithm=algorithm,
-                                visualize_as=visualize_as,
-                                vector_scalar=vector_scalar,
-                                lower_mag_threshold=lower_mag_threshold,
-                                upper_mag_threshold=upper_mag_threshold,
-                                save_input_images=save_input_images,
-                                save_midpoint_images=save_midpoint_images,
-                                save_output_images=save_output_images)
-
-    def modify_frame(self, frame, frame_index):
-
-        self.gaze_center_Frame(frame, frame_index)
-
-    def get_median_gaze_for_frame(self, frame_index):
-
-        gaze_samples_on_frame = self.gaze_data[self.gaze_data['world_index'] == frame_index]
-        gaze_samples_on_frame = gaze_samples_on_frame[
-            gaze_samples_on_frame['confidence'] > self.analysis_parameters['pl_confidence_threshold']]
-
-        if len(gaze_samples_on_frame) == 0:
-            # Out of frame
-            return (np.NAN, np.NAN)
-
-        median_x = np.nanmedian(gaze_samples_on_frame['norm_pos_x'])
-        median_y = 1 - np.nanmedian(gaze_samples_on_frame['norm_pos_y'])
-
-        if median_x < 0 or median_y < 0 or median_x > 1 or median_y > 1:
-            # Out of frame
-            return (np.NAN, np.NAN)
-
-        return (median_x, median_y)
-
-    def process_gaze_data(self):
-
-        idx_list = np.unique(self.gaze_data.world_index)
-        med_xy = [self.get_median_gaze_for_frame(idx) for idx in idx_list]
-
-        med_x, med_y = zip(*med_xy)
-
-        processed_gaze_data = pd.DataFrame({'median_x': med_x, 'median_y': med_y})
-        # processed_gaze_data.rolling(3).median()
-        processed_gaze_data.rolling(3).apply(lambda x: np.nanmean(x))
-
-        self.processed_gaze_data = processed_gaze_data
-
-    def recenter_frame_on_gaze(self, frame, frame_index):
-
-        height = np.shape(frame)[0]
-        width = np.shape(frame)[1]
-
-        # if self.processed_gaze_data is False:
-        #     self.process_gaze_data()
-
-        if not (frame_index - 1 in self.processed_gaze_data.index):
-            return np.zeros((height, width, 3), np.uint8)
-
-        data = self.processed_gaze_data.loc[frame_index - 1]
-
-        if np.isnan(data['median_x']) or np.isnan(data['median_y']):
-            return np.zeros((height, width, 3), np.uint8)
-
-        median_x = data['median_x']
-        median_y = data['median_y']
-
-        new_image = np.zeros((height*3,width*3,3), np.uint8)
-
-        center_x = width * 1.5
-        center_y = height * 1.5
-        medianpix_x = int(median_x * width)
-        medianpix_y = int(median_y * height)
-
-        x1 = int(center_x - medianpix_x)
-        x2 = int(center_x + width - medianpix_x)
-        y1 = int(center_y - medianpix_y)
-        y2 = int(center_y + height - medianpix_y)
-
-        new_image[ y1:y2, x1:x2,:] = frame
-
-        # remove padding
-        new_image = new_image[ height:height*2, width:width*2,:]
-
-        return new_image
-
-    def draw_gaze_in_head(self, frame, frame_index):
-
-        med_xy = self.get_median_gaze_for_frame(frame_index)
-
-        if med_xy:
-
-            median_x, median_y = med_xy
-
-            height = np.shape(frame)[0]
-            width = np.shape(frame)[1]
-
-            frame = cv2.line(frame, (int(width * median_x), 0), (int(width * median_x), height),
-                             (255, 0, 0), thickness=2)
-
-            frame = cv2.line(frame, (0, int(height * median_y)), (width, int(height * median_y)),
-                             (255, 0, 0), thickness=2)
-
-            cv2.imwrite('temp.png', frame, [cv2.IMWRITE_PNG_COMPRESSION, 0])
-
-            return frame
-
-    def import_gaze_from_exports(self):
-        gaze_positions_path = os.path.join(self.export_folder, 'gaze_positions.csv')
-
-        if os.path.exists(gaze_positions_path) is False:
-            logger.error('No gaze_positions found in the exports folder.')
-
-        # Defaults to the most recent pupil export folder (highest number)
-        return pd.read_csv(gaze_positions_path)
-
-    def set_export_folder(self):
-
-        exports_parent_folder = os.path.join(self.recording_folder, 'exports')
-
-        if os.path.exists(exports_parent_folder) is False:
-
-            os.mkdir(exports_parent_folder)
-            export_folder_path = os.path.join(exports_parent_folder, '001')
-            os.mkdir(export_folder_path)
-            return export_folder_path
-
-        else:
-            if self.export_number is False:
-                export_folder_list = []
-                [export_folder_list.append(name) for name in os.listdir(exports_parent_folder) if name[0] != '.']
-                self.export_number = export_folder_list[-1]
-
-            export_folder_path = os.path.join(exports_parent_folder, self.export_number)
-            return export_folder_path
-
-    def set_recording_folder(self):
-        '''
-        :param pupil_session_idx:  the index of the pupil session to use with respect to the list of folders in the
-        # session directoy.  Typically, these start at 000 and go up from there.
-
-        :return: void
-        '''
-
-        def get_highest_value_folder(parent_folder):
-            sub_folder_list = []
-            [sub_folder_list.append(name) for name in os.listdir(parent_folder) if name[0] != '.']
-            if len(sub_folder_list) == 0:
-                logger.warning('No sub folders found in ' + parent_folder)
-                return False
-            return sub_folder_list[-1]
-
-        # Defaults to the last session
-        if self.session_number is False:
-            self.session_number = get_highest_value_folder(self.pupil_labs_parent_folder)
-
-        session_folder = os.path.join(self.pupil_labs_parent_folder, self.session_number, 'PupilData')
-
-        # Defaults to the last recording
-        if self.recording_number is False:
-            recording_folder_list = []
-            self.recording_number = get_highest_value_folder(session_folder)
-
-        recording_folder = os.path.join(session_folder, self.recording_number)
-
-        return recording_folder
-
-    def add_visualization(self,
-                          raw_frame,
-                          frame,
-                          visualize_as,
-                          lower_mag_threshold=False,
-                          upper_mag_threshold=False,
-                          mask=None,
-                          image1_gpu=None,
-                          image2_gpu=None,
-                          image1_gray=None,
-                          image2_gray=None,
-                          algo_supports_cuda=False,
-                          vector_scalar=1):
-
-        if visualize_as in ['hsv_stacked']:
-            logger.exception('This visualization method is not available for pupil labs data folders')
-
-        # if visualize_as in ['gaze-centered_streamlines', 'gaze-centered_vectors']:
-        #     logger.exception('This visualization method is not implemented')
-
-        if 'gaze-centered' in visualize_as:
-            frame = self.recenter_frame_on_gaze(frame, raw_frame.index)
-            image1_gpu.upload(frame)
-            image1_gpu = cv2.cuda.cvtColor(image1_gpu, cv2.COLOR_BGR2GRAY)
-            image1_gpu = self.clahe.apply(image1_gpu, cv2.cuda_Stream.Null())
-
-
-
-        if visualize_as == 'gaze-centered_hsv':
-            visualize_as = 'hsv_overlay'
-        elif visualize_as == 'gaze-centered_vectors':
-            visualize_as = 'hsv_overlay'
-        elif visualize_as == 'gaze-centered_streamlines':
-            visualize_as = 'streamlines'
-
-        # Calculate flow
-        if algo_supports_cuda and self.cuda_enabled:
-
-            image_out, frame_out, image1_gray = super().add_visualization(raw_frame,
-                                                             frame,
-                                                             visualize_as,
-                                                             image1_gray=image1_gray,
-                                                             image1_gpu=image1_gpu,
-                                                             image2_gpu=image2_gpu,
-                                                             algo_supports_cuda=algo_supports_cuda)
-
-
-        else:
-
-            image_out, frame_out, image1_gray = super().add_visualization(raw_frame,
-                                                             frame,
-                                                             visualize_as,
-                                                             image1_gray=image1_gray,
-                                                             image2_gray=image2_gray,
-                                                             algo_supports_cuda=algo_supports_cuda)
-
-            image2_gray = image1_gray
-
-        return image_out, frame_out, image1_gray
+# class pupil_labs_source(video_source):
+#
+#     def __init__(self, pupil_labs_parent_folder,
+#                  session_number=False,
+#                  recording_number=False,
+#                  export_number=False,
+#                  analysis_parameters_file='default_analysis_parameters.json'):
+#
+#         self.analysis_parameters = json.load(open(analysis_parameters_file))
+#
+#         self.pupil_labs_parent_folder = pupil_labs_parent_folder
+#
+#         self.session_number = session_number
+#         self.recording_number = recording_number
+#         self.export_number = export_number
+#
+#         self.recording_folder = self.set_recording_folder()
+#         self.export_folder = self.set_export_folder()
+#
+#         self.world_video_path = os.path.join(self.recording_folder, 'world.mp4')
+#
+#         self.gaze_data = False
+#         self.processed_gaze_data = False
+#
+#         super().__init__(self.world_video_path, out_parent_dir=self.export_folder)
+#
+#         self.raw_frames_out_path = os.path.join(self.out_parent_dir, 'world_images')
+#         self.mid_frames_out_path = os.path.join(self.out_parent_dir, 'flow_mid_images')
+#         self.flow_frames_out_path = os.path.join(self.out_parent_dir, 'flow_images')
+#         self.video_out_path = self.out_parent_dir
+#         self.magnitude_out_path = os.path.join(self.out_parent_dir, 'flow_magnitude_data')
+#
+#         f = open(os.path.join(self.recording_folder, 'info.player.json'))
+#         self.player_info = json.load(f)
+#         f.close()
+#
+#     def calculate_flow(self, video_out_name=False, algorithm="tvl1", visualize_as="hsv_stacked",
+#                        vector_scalar=1,
+#                        lower_mag_threshold=False,
+#                        upper_mag_threshold=False,
+#                        save_input_images=False,
+#                        save_midpoint_images=False,
+#                        save_output_images=False):
+#
+#         if "gaze-centered" in visualize_as and not self.gaze_data:
+#             self.import_gaze_from_exports()
+#             self.process_gaze_data()
+#
+#         super().calculate_flow( video_out_name=video_out_name,
+#                                 algorithm=algorithm,
+#                                 visualize_as=visualize_as,
+#                                 vector_scalar=vector_scalar,
+#                                 lower_mag_threshold=lower_mag_threshold,
+#                                 upper_mag_threshold=upper_mag_threshold,
+#                                 save_input_images=save_input_images,
+#                                 save_midpoint_images=save_midpoint_images,
+#                                 save_output_images=save_output_images)
+#
+#     def modify_frame(self, frame, frame_index):
+#
+#         self.gaze_center_Frame(frame, frame_index)
+#
+#     def get_median_gaze_for_frame(self, frame_index):
+#
+#         gaze_samples_on_frame = self.gaze_data[self.gaze_data['world_index'] == frame_index]
+#         gaze_samples_on_frame = gaze_samples_on_frame[
+#             gaze_samples_on_frame['confidence'] > self.analysis_parameters['pl_confidence_threshold']]
+#
+#         if len(gaze_samples_on_frame) == 0:
+#             # Out of frame
+#             return (np.NAN, np.NAN)
+#
+#         median_x = np.nanmedian(gaze_samples_on_frame['norm_pos_x'])
+#         median_y = 1 - np.nanmedian(gaze_samples_on_frame['norm_pos_y'])
+#
+#         if median_x < 0 or median_y < 0 or median_x > 1 or median_y > 1:
+#             # Out of frame
+#             return (np.NAN, np.NAN)
+#
+#         return (median_x, median_y)
+#
+#     def process_gaze_data(self):
+#
+#         idx_list = np.unique(self.gaze_data.world_index)
+#         med_xy = [self.get_median_gaze_for_frame(idx) for idx in idx_list]
+#
+#         med_x, med_y = zip(*med_xy)
+#
+#         processed_gaze_data = pd.DataFrame({'median_x': med_x, 'median_y': med_y})
+#         # processed_gaze_data.rolling(3).median()
+#         processed_gaze_data.rolling(3).apply(lambda x: np.nanmean(x))
+#
+#         self.processed_gaze_data = processed_gaze_data
+#
+#     def recenter_frame_on_gaze(self, frame, frame_index):
+#
+#         height = np.shape(frame)[0]
+#         width = np.shape(frame)[1]
+#
+#         # if self.processed_gaze_data is False:
+#         #     self.process_gaze_data()
+#
+#         if not (frame_index - 1 in self.processed_gaze_data.index):
+#             return np.zeros((height, width, 3), np.uint8)
+#
+#         data = self.processed_gaze_data.loc[frame_index - 1]
+#
+#         if np.isnan(data['median_x']) or np.isnan(data['median_y']):
+#             return np.zeros((height, width, 3), np.uint8)
+#
+#         median_x = data['median_x']
+#         median_y = data['median_y']
+#
+#         new_image = np.zeros((height*3,width*3,3), np.uint8)
+#
+#         center_x = width * 1.5
+#         center_y = height * 1.5
+#         medianpix_x = int(median_x * width)
+#         medianpix_y = int(median_y * height)
+#
+#         x1 = int(center_x - medianpix_x)
+#         x2 = int(center_x + width - medianpix_x)
+#         y1 = int(center_y - medianpix_y)
+#         y2 = int(center_y + height - medianpix_y)
+#
+#         new_image[ y1:y2, x1:x2,:] = frame
+#
+#         # remove padding
+#         new_image = new_image[ height:height*2, width:width*2,:]
+#
+#         return new_image
+#
+#     def draw_gaze_in_head(self, frame, frame_index):
+#
+#         med_xy = self.get_median_gaze_for_frame(frame_index)
+#
+#         if med_xy:
+#
+#             median_x, median_y = med_xy
+#
+#             height = np.shape(frame)[0]
+#             width = np.shape(frame)[1]
+#
+#             frame = cv2.line(frame, (int(width * median_x), 0), (int(width * median_x), height),
+#                              (255, 0, 0), thickness=2)
+#
+#             frame = cv2.line(frame, (0, int(height * median_y)), (width, int(height * median_y)),
+#                              (255, 0, 0), thickness=2)
+#
+#             cv2.imwrite('temp.png', frame, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+#
+#             return frame
+#
+#     def import_gaze_from_exports(self):
+#         gaze_positions_path = os.path.join(self.export_folder, 'gaze_positions.csv')
+#
+#         if os.path.exists(gaze_positions_path) is False:
+#             logger.error('No gaze_positions found in the exports folder.')
+#
+#         # Defaults to the most recent pupil export folder (highest number)
+#         return pd.read_csv(gaze_positions_path)
+#
+#     def set_export_folder(self):
+#
+#         exports_parent_folder = os.path.join(self.recording_folder, 'exports')
+#
+#         if os.path.exists(exports_parent_folder) is False:
+#
+#             os.mkdir(exports_parent_folder)
+#             export_folder_path = os.path.join(exports_parent_folder, '001')
+#             os.mkdir(export_folder_path)
+#             return export_folder_path
+#
+#         else:
+#             if self.export_number is False:
+#                 export_folder_list = []
+#                 [export_folder_list.append(name) for name in os.listdir(exports_parent_folder) if name[0] != '.']
+#                 self.export_number = export_folder_list[-1]
+#
+#             export_folder_path = os.path.join(exports_parent_folder, self.export_number)
+#             return export_folder_path
+#
+#     def set_recording_folder(self):
+#         '''
+#         :param pupil_session_idx:  the index of the pupil session to use with respect to the list of folders in the
+#         # session directoy.  Typically, these start at 000 and go up from there.
+#
+#         :return: void
+#         '''
+#
+#         def get_highest_value_folder(parent_folder):
+#             sub_folder_list = []
+#             [sub_folder_list.append(name) for name in os.listdir(parent_folder) if name[0] != '.']
+#             if len(sub_folder_list) == 0:
+#                 logger.warning('No sub folders found in ' + parent_folder)
+#                 return False
+#             return sub_folder_list[-1]
+#
+#         # Defaults to the last session
+#         if self.session_number is False:
+#             self.session_number = get_highest_value_folder(self.pupil_labs_parent_folder)
+#
+#         session_folder = os.path.join(self.pupil_labs_parent_folder, self.session_number, 'PupilData')
+#
+#         # Defaults to the last recording
+#         if self.recording_number is False:
+#             recording_folder_list = []
+#             self.recording_number = get_highest_value_folder(session_folder)
+#
+#         recording_folder = os.path.join(session_folder, self.recording_number)
+#
+#         return recording_folder
+#
+#     def add_visualization(self,
+#                           raw_frame,
+#                           frame,
+#                           visualize_as,
+#                           lower_mag_threshold=False,
+#                           upper_mag_threshold=False,
+#                           mask=None,
+#                          self.current_gpu=None,
+#                          self.previous_gpu=None,
+#                           image1_gray=None,
+#                           image2_gray=None,
+#                           algo_supports_cuda=False,
+#                           vector_scalar=1):
+#
+#         if visualize_as in ['hsv_stacked']:
+#             logger.exception('This visualization method is not available for pupil labs data folders')
+#
+#         # if visualize_as in ['gaze-centered_streamlines', 'gaze-centered_vectors']:
+#         #     logger.exception('This visualization method is not implemented')
+#
+#         if 'gaze-centered' in visualize_as:
+#             frame = self.recenter_frame_on_gaze(frame, raw_frame.index)
+#            self.current_gpu.upload(frame)
+#            self.current_gpu = cv2.cuda.cvtColor(current_gpu, cv2.COLOR_BGR2GRAY)
+#            self.current_gpu = self.clahe.apply(current_gpu, cv2.cuda_Stream.Null())
+#
+#
+#
+#         if visualize_as == 'gaze-centered_hsv':
+#             visualize_as = 'hsv_overlay'
+#         elif visualize_as == 'gaze-centered_vectors':
+#             visualize_as = 'hsv_overlay'
+#         elif visualize_as == 'gaze-centered_streamlines':
+#             visualize_as = 'streamlines'
+#
+#         # Calculate flow
+#         if algo_supports_cuda and self.cuda_enabled:
+#
+#             image_out, frame_out, image1_gray = super().add_visualization(raw_frame,
+#                                                              frame,
+#                                                              visualize_as,
+#                                                              image1_gray=image1_gray,
+#                                                             self.current_gpu=current_gpu,
+#                                                             self.previous_gpu=previous_gpu,
+#                                                              algo_supports_cuda=algo_supports_cuda)
+#
+#
+#         else:
+#
+#             image_out, frame_out, image1_gray = super().add_visualization(raw_frame,
+#                                                              frame,
+#                                                              visualize_as,
+#                                                              image1_gray=image1_gray,
+#                                                              image2_gray=image2_gray,
+#                                                              algo_supports_cuda=algo_supports_cuda)
+#
+#             image2_gray = image1_gray
+#
+#         return image_out, frame_out, image1_gray
 
 if __name__ == "__main__":
     # a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
@@ -944,7 +1021,7 @@ if __name__ == "__main__":
                           visualize_as="hsv_overlay",
                           lower_mag_threshold=0,
                           upper_mag_threshold=30,
-                          vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=True)
+                          vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=False)
 
     #
 

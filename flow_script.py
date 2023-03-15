@@ -188,6 +188,12 @@ for i in tqdm(range(1, num_frames), desc="Generating " + vid_out_full_path, unit
 
     magnitude = ((magnitude-lower_mag_threshold) / (upper_mag_threshold-lower_mag_threshold)) * 255.0
 
+
+
+    # 56.205658
+    # 43.350235
+    # 57.2053
+
     # magnitude = cv2.normalize(magnitude, None, 0, np.nanmax(magnitude), cv2.NORM_MINMAX, -1)
     hsv = np.zeros([np.shape(magnitude)[0], np.shape(magnitude)[1], 3], np.uint8)
     hsv[..., 0] = angle * 180 / np.pi / 2
