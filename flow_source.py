@@ -222,7 +222,7 @@ class video_source():
 
         return container_in, container_in.streams.video[0], container_out, stream_out
 
-    def calculate_flow(self, video_out_name=False, algorithm="tvl1", visualize_as="hsv_stacked",
+    def calculate_flow(self, video_out_name=False, algorithm="nvidia2", visualize_as="hsv_stacked",
                        vector_scalar=1,
                        lower_mag_threshold=False,
                        upper_mag_threshold=False,
@@ -291,7 +291,7 @@ class video_source():
                 self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
 
             image_out = self.add_visualization(raw_frame.index,
-                                               self.current_gray,
+                                               current_bgr_processed,
                                                visualize_as,
                                                algo_supports_cuda=algo_supports_cuda,
                                                lower_mag_threshold=lower_mag_threshold,
@@ -328,7 +328,7 @@ class video_source():
 
         self.save_out_mag_histogram(algorithm, visualize_as)
 
-    def calculate_flow_for_frame(self, index, current_bgr, algo_supports_cuda, lower_mag_threshold=False, upper_mag_threshold=False):
+    def calculate_flow_for_frame(self, index, algo_supports_cuda, lower_mag_threshold=False, upper_mag_threshold=False):
 
         if self.cuda_enabled and algo_supports_cuda:
 
@@ -354,7 +354,6 @@ class video_source():
 
         magnitude, angle = self.flow_to_mag_angle(index,
                                                   flow,
-                                                  current_bgr,
                                                   lower_mag_threshold=lower_mag_threshold,
                                                   upper_mag_threshold=upper_mag_threshold)
 
@@ -378,7 +377,7 @@ class video_source():
                 packet_out.pts = rawframe_in.pts
                 c_out.mux(packet_out)
 
-    def flow_to_mag_angle(self, index, flow, current_bgr, lower_mag_threshold=False, upper_mag_threshold=False):
+    def flow_to_mag_angle(self, index, flow, lower_mag_threshold=False, upper_mag_threshold=False):
 
         # Convert flow to mag / angle
             magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
@@ -473,8 +472,6 @@ class video_source():
         frame = cv2.bitwise_and(frame, frame, mask=mask)
         return frame
 
-
-
     def add_visualization(self,
                           index,
                           current_bgr,
@@ -484,9 +481,7 @@ class video_source():
                           lower_mag_threshold=False,
                           vector_scalar=1):
 
-
         flow, magnitude, angle = self.calculate_flow_for_frame(index,
-                                                               current_bgr,
                                                                algo_supports_cuda,
                                                                lower_mag_threshold=lower_mag_threshold,
                                                                upper_mag_threshold=upper_mag_threshold)
@@ -601,286 +596,267 @@ class video_source():
 
 
 
-# class pupil_labs_source(video_source):
-#
-#     def __init__(self, pupil_labs_parent_folder,
-#                  session_number=False,
-#                  recording_number=False,
-#                  export_number=False,
-#                  analysis_parameters_file='default_analysis_parameters.json'):
-#
-#         self.analysis_parameters = json.load(open(analysis_parameters_file))
-#
-#         self.pupil_labs_parent_folder = pupil_labs_parent_folder
-#
-#         self.session_number = session_number
-#         self.recording_number = recording_number
-#         self.export_number = export_number
-#
-#         self.recording_folder = self.set_recording_folder()
-#         self.export_folder = self.set_export_folder()
-#
-#         self.world_video_path = os.path.join(self.recording_folder, 'world.mp4')
-#
-#         self.gaze_data = False
-#         self.processed_gaze_data = False
-#
-#         super().__init__(self.world_video_path, out_parent_dir=self.export_folder)
-#
-#         self.raw_frames_out_path = os.path.join(self.out_parent_dir, 'world_images')
-#         self.mid_frames_out_path = os.path.join(self.out_parent_dir, 'flow_mid_images')
-#         self.flow_frames_out_path = os.path.join(self.out_parent_dir, 'flow_images')
-#         self.video_out_path = self.out_parent_dir
-#         self.magnitude_out_path = os.path.join(self.out_parent_dir, 'flow_magnitude_data')
-#
-#         f = open(os.path.join(self.recording_folder, 'info.player.json'))
-#         self.player_info = json.load(f)
-#         f.close()
-#
-#     def calculate_flow(self, video_out_name=False, algorithm="tvl1", visualize_as="hsv_stacked",
-#                        vector_scalar=1,
-#                        lower_mag_threshold=False,
-#                        upper_mag_threshold=False,
-#                        save_input_images=False,
-#                        save_midpoint_images=False,
-#                        save_output_images=False):
-#
-#         if "gaze-centered" in visualize_as and not self.gaze_data:
-#             self.import_gaze_from_exports()
-#             self.process_gaze_data()
-#
-#         super().calculate_flow( video_out_name=video_out_name,
-#                                 algorithm=algorithm,
-#                                 visualize_as=visualize_as,
-#                                 vector_scalar=vector_scalar,
-#                                 lower_mag_threshold=lower_mag_threshold,
-#                                 upper_mag_threshold=upper_mag_threshold,
-#                                 save_input_images=save_input_images,
-#                                 save_midpoint_images=save_midpoint_images,
-#                                 save_output_images=save_output_images)
-#
-#     def modify_frame(self, frame, frame_index):
-#
-#         self.gaze_center_Frame(frame, frame_index)
-#
-#     def get_median_gaze_for_frame(self, frame_index):
-#
-#         gaze_samples_on_frame = self.gaze_data[self.gaze_data['world_index'] == frame_index]
-#         gaze_samples_on_frame = gaze_samples_on_frame[
-#             gaze_samples_on_frame['confidence'] > self.analysis_parameters['pl_confidence_threshold']]
-#
-#         if len(gaze_samples_on_frame) == 0:
-#             # Out of frame
-#             return (np.NAN, np.NAN)
-#
-#         median_x = np.nanmedian(gaze_samples_on_frame['norm_pos_x'])
-#         median_y = 1 - np.nanmedian(gaze_samples_on_frame['norm_pos_y'])
-#
-#         if median_x < 0 or median_y < 0 or median_x > 1 or median_y > 1:
-#             # Out of frame
-#             return (np.NAN, np.NAN)
-#
-#         return (median_x, median_y)
-#
-#     def process_gaze_data(self):
-#
-#         idx_list = np.unique(self.gaze_data.world_index)
-#         med_xy = [self.get_median_gaze_for_frame(idx) for idx in idx_list]
-#
-#         med_x, med_y = zip(*med_xy)
-#
-#         processed_gaze_data = pd.DataFrame({'median_x': med_x, 'median_y': med_y})
-#         # processed_gaze_data.rolling(3).median()
-#         processed_gaze_data.rolling(3).apply(lambda x: np.nanmean(x))
-#
-#         self.processed_gaze_data = processed_gaze_data
-#
-#     def recenter_frame_on_gaze(self, frame, frame_index):
-#
-#         height = np.shape(frame)[0]
-#         width = np.shape(frame)[1]
-#
-#         # if self.processed_gaze_data is False:
-#         #     self.process_gaze_data()
-#
-#         if not (frame_index - 1 in self.processed_gaze_data.index):
-#             return np.zeros((height, width, 3), np.uint8)
-#
-#         data = self.processed_gaze_data.loc[frame_index - 1]
-#
-#         if np.isnan(data['median_x']) or np.isnan(data['median_y']):
-#             return np.zeros((height, width, 3), np.uint8)
-#
-#         median_x = data['median_x']
-#         median_y = data['median_y']
-#
-#         new_image = np.zeros((height*3,width*3,3), np.uint8)
-#
-#         center_x = width * 1.5
-#         center_y = height * 1.5
-#         medianpix_x = int(median_x * width)
-#         medianpix_y = int(median_y * height)
-#
-#         x1 = int(center_x - medianpix_x)
-#         x2 = int(center_x + width - medianpix_x)
-#         y1 = int(center_y - medianpix_y)
-#         y2 = int(center_y + height - medianpix_y)
-#
-#         new_image[ y1:y2, x1:x2,:] = frame
-#
-#         # remove padding
-#         new_image = new_image[ height:height*2, width:width*2,:]
-#
-#         return new_image
-#
-#     def draw_gaze_in_head(self, frame, frame_index):
-#
-#         med_xy = self.get_median_gaze_for_frame(frame_index)
-#
-#         if med_xy:
-#
-#             median_x, median_y = med_xy
-#
-#             height = np.shape(frame)[0]
-#             width = np.shape(frame)[1]
-#
-#             frame = cv2.line(frame, (int(width * median_x), 0), (int(width * median_x), height),
-#                              (255, 0, 0), thickness=2)
-#
-#             frame = cv2.line(frame, (0, int(height * median_y)), (width, int(height * median_y)),
-#                              (255, 0, 0), thickness=2)
-#
-#             cv2.imwrite('temp.png', frame, [cv2.IMWRITE_PNG_COMPRESSION, 0])
-#
-#             return frame
-#
-#     def import_gaze_from_exports(self):
-#         gaze_positions_path = os.path.join(self.export_folder, 'gaze_positions.csv')
-#
-#         if os.path.exists(gaze_positions_path) is False:
-#             logger.error('No gaze_positions found in the exports folder.')
-#
-#         # Defaults to the most recent pupil export folder (highest number)
-#         return pd.read_csv(gaze_positions_path)
-#
-#     def set_export_folder(self):
-#
-#         exports_parent_folder = os.path.join(self.recording_folder, 'exports')
-#
-#         if os.path.exists(exports_parent_folder) is False:
-#
-#             os.mkdir(exports_parent_folder)
-#             export_folder_path = os.path.join(exports_parent_folder, '001')
-#             os.mkdir(export_folder_path)
-#             return export_folder_path
-#
-#         else:
-#             if self.export_number is False:
-#                 export_folder_list = []
-#                 [export_folder_list.append(name) for name in os.listdir(exports_parent_folder) if name[0] != '.']
-#                 self.export_number = export_folder_list[-1]
-#
-#             export_folder_path = os.path.join(exports_parent_folder, self.export_number)
-#             return export_folder_path
-#
-#     def set_recording_folder(self):
-#         '''
-#         :param pupil_session_idx:  the index of the pupil session to use with respect to the list of folders in the
-#         # session directoy.  Typically, these start at 000 and go up from there.
-#
-#         :return: void
-#         '''
-#
-#         def get_highest_value_folder(parent_folder):
-#             sub_folder_list = []
-#             [sub_folder_list.append(name) for name in os.listdir(parent_folder) if name[0] != '.']
-#             if len(sub_folder_list) == 0:
-#                 logger.warning('No sub folders found in ' + parent_folder)
-#                 return False
-#             return sub_folder_list[-1]
-#
-#         # Defaults to the last session
-#         if self.session_number is False:
-#             self.session_number = get_highest_value_folder(self.pupil_labs_parent_folder)
-#
-#         session_folder = os.path.join(self.pupil_labs_parent_folder, self.session_number, 'PupilData')
-#
-#         # Defaults to the last recording
-#         if self.recording_number is False:
-#             recording_folder_list = []
-#             self.recording_number = get_highest_value_folder(session_folder)
-#
-#         recording_folder = os.path.join(session_folder, self.recording_number)
-#
-#         return recording_folder
-#
-#     def add_visualization(self,
-#                           raw_frame,
-#                           frame,
-#                           visualize_as,
-#                           lower_mag_threshold=False,
-#                           upper_mag_threshold=False,
-#                           mask=None,
-#                          self.current_gpu=None,
-#                          self.previous_gpu=None,
-#                           image1_gray=None,
-#                           image2_gray=None,
-#                           algo_supports_cuda=False,
-#                           vector_scalar=1):
-#
-#         if visualize_as in ['hsv_stacked']:
-#             logger.exception('This visualization method is not available for pupil labs data folders')
-#
-#         # if visualize_as in ['gaze-centered_streamlines', 'gaze-centered_vectors']:
-#         #     logger.exception('This visualization method is not implemented')
-#
-#         if 'gaze-centered' in visualize_as:
-#             frame = self.recenter_frame_on_gaze(frame, raw_frame.index)
-#            self.current_gpu.upload(frame)
-#            self.current_gpu = cv2.cuda.cvtColor(current_gpu, cv2.COLOR_BGR2GRAY)
-#            self.current_gpu = self.clahe.apply(current_gpu, cv2.cuda_Stream.Null())
-#
-#
-#
-#         if visualize_as == 'gaze-centered_hsv':
-#             visualize_as = 'hsv_overlay'
-#         elif visualize_as == 'gaze-centered_vectors':
-#             visualize_as = 'hsv_overlay'
-#         elif visualize_as == 'gaze-centered_streamlines':
-#             visualize_as = 'streamlines'
-#
-#         # Calculate flow
-#         if algo_supports_cuda and self.cuda_enabled:
-#
-#             image_out, frame_out, image1_gray = super().add_visualization(raw_frame,
-#                                                              frame,
-#                                                              visualize_as,
-#                                                              image1_gray=image1_gray,
-#                                                             self.current_gpu=current_gpu,
-#                                                             self.previous_gpu=previous_gpu,
-#                                                              algo_supports_cuda=algo_supports_cuda)
-#
-#
-#         else:
-#
-#             image_out, frame_out, image1_gray = super().add_visualization(raw_frame,
-#                                                              frame,
-#                                                              visualize_as,
-#                                                              image1_gray=image1_gray,
-#                                                              image2_gray=image2_gray,
-#                                                              algo_supports_cuda=algo_supports_cuda)
-#
-#             image2_gray = image1_gray
-#
-#         return image_out, frame_out, image1_gray
+class pupil_labs_source(video_source):
+
+    def __init__(self, pupil_labs_parent_folder,
+                 session_number=False,
+                 recording_number=False,
+                 export_number=False,
+                 analysis_parameters_file='default_analysis_parameters.json'):
+
+        self.analysis_parameters = json.load(open(analysis_parameters_file))
+
+        self.pupil_labs_parent_folder = pupil_labs_parent_folder
+
+        self.session_number = session_number
+        self.recording_number = recording_number
+        self.export_number = export_number
+
+        self.recording_folder = self.set_recording_folder()
+        self.export_folder = self.set_export_folder()
+
+        self.world_video_path = os.path.join(self.recording_folder, 'world.mp4')
+
+        self.gaze_data = False
+        self.processed_gaze_data = False
+
+        super().__init__(self.world_video_path, out_parent_dir=self.export_folder)
+
+        self.raw_frames_out_path = os.path.join(self.out_parent_dir, 'world_images')
+        self.mid_frames_out_path = os.path.join(self.out_parent_dir, 'flow_mid_images')
+        self.flow_frames_out_path = os.path.join(self.out_parent_dir, 'flow_images')
+        self.video_out_path = self.out_parent_dir
+        self.magnitude_out_path = os.path.join(self.out_parent_dir, 'flow_magnitude_data')
+
+        f = open(os.path.join(self.recording_folder, 'info.player.json'))
+        self.player_info = json.load(f)
+        f.close()
+
+    def calculate_flow(self, video_out_name=False,
+                       algorithm="nvidia2",
+                       visualize_as="hsv_stacked",
+                       vector_scalar=1,
+                       lower_mag_threshold=False,
+                       upper_mag_threshold=False,
+                       save_input_images=False,
+                       save_midpoint_images=False,
+                       save_output_images=False):
+
+        if "gaze-centered" in visualize_as and not self.gaze_data:
+            self.import_gaze_from_exports()
+            self.process_gaze_data()
+
+        super().calculate_flow(video_out_name=video_out_name,
+                               algorithm=algorithm,
+                               visualize_as=visualize_as,
+                               vector_scalar=vector_scalar,
+                               lower_mag_threshold=lower_mag_threshold,
+                               upper_mag_threshold=upper_mag_threshold,
+                               save_input_images=save_input_images,
+                               save_midpoint_images=save_midpoint_images,
+                               save_output_images=save_output_images)
+
+    def modify_frame(self, frame, frame_index):
+
+        self.gaze_center_Frame(frame, frame_index)
+
+    def get_median_gaze_for_frame(self, frame_index):
+
+        gaze_samples_on_frame = self.gaze_data[self.gaze_data['world_index'] == frame_index]
+        gaze_samples_on_frame = gaze_samples_on_frame[
+            gaze_samples_on_frame['confidence'] > self.analysis_parameters['pl_confidence_threshold']]
+
+        if len(gaze_samples_on_frame) == 0:
+            # Out of frame
+            return (np.NAN, np.NAN)
+
+        median_x = np.nanmedian(gaze_samples_on_frame['norm_pos_x'])
+        median_y = 1 - np.nanmedian(gaze_samples_on_frame['norm_pos_y'])
+
+        if median_x < 0 or median_y < 0 or median_x > 1 or median_y > 1:
+            # Out of frame
+            return (np.NAN, np.NAN)
+
+        return (median_x, median_y)
+
+    def process_gaze_data(self):
+
+        idx_list = np.unique(self.gaze_data.world_index)
+        med_xy = [self.get_median_gaze_for_frame(idx) for idx in idx_list]
+
+        med_x, med_y = zip(*med_xy)
+
+        processed_gaze_data = pd.DataFrame({'median_x': med_x, 'median_y': med_y})
+        # processed_gaze_data.rolling(3).median()
+        processed_gaze_data.rolling(3).apply(lambda x: np.nanmean(x))
+
+        self.processed_gaze_data = processed_gaze_data
+
+    def recenter_frame_on_gaze(self, frame, frame_index):
+
+        height = np.shape(frame)[0]
+        width = np.shape(frame)[1]
+
+        # if self.processed_gaze_data is False:
+        #     self.process_gaze_data()
+
+        if not (frame_index - 1 in self.processed_gaze_data.index):
+            return np.zeros((height, width, 3), np.uint8)
+
+        data = self.processed_gaze_data.loc[frame_index - 1]
+
+        if np.isnan(data['median_x']) or np.isnan(data['median_y']):
+            return np.zeros((height, width, 3), np.uint8)
+
+        median_x = data['median_x']
+        median_y = data['median_y']
+
+        new_image = np.zeros((height*3,width*3,3), np.uint8)
+
+        center_x = width * 1.5
+        center_y = height * 1.5
+        medianpix_x = int(median_x * width)
+        medianpix_y = int(median_y * height)
+
+        x1 = int(center_x - medianpix_x)
+        x2 = int(center_x + width - medianpix_x)
+        y1 = int(center_y - medianpix_y)
+        y2 = int(center_y + height - medianpix_y)
+
+        new_image[ y1:y2, x1:x2,:] = frame
+
+        # remove padding
+        new_image = new_image[ height:height*2, width:width*2,:]
+
+        return new_image
+
+    def draw_gaze_in_head(self, frame, frame_index):
+
+        med_xy = self.get_median_gaze_for_frame(frame_index)
+
+        if med_xy:
+
+            median_x, median_y = med_xy
+
+            height = np.shape(frame)[0]
+            width = np.shape(frame)[1]
+
+            frame = cv2.line(frame, (int(width * median_x), 0), (int(width * median_x), height),
+                             (255, 0, 0), thickness=2)
+
+            frame = cv2.line(frame, (0, int(height * median_y)), (width, int(height * median_y)),
+                             (255, 0, 0), thickness=2)
+
+            cv2.imwrite('temp.png', frame, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+
+            return frame
+
+    def import_gaze_from_exports(self):
+        gaze_positions_path = os.path.join(self.export_folder, 'gaze_positions.csv')
+
+        if os.path.exists(gaze_positions_path) is False:
+            logger.error('No gaze_positions found in the exports folder.')
+
+        # Defaults to the most recent pupil export folder (highest number)
+        return pd.read_csv(gaze_positions_path)
+
+    def set_export_folder(self):
+
+        exports_parent_folder = os.path.join(self.recording_folder, 'exports')
+
+        if os.path.exists(exports_parent_folder) is False:
+
+            os.mkdir(exports_parent_folder)
+            export_folder_path = os.path.join(exports_parent_folder, '001')
+            os.mkdir(export_folder_path)
+            return export_folder_path
+
+        else:
+            if self.export_number is False:
+                export_folder_list = []
+                [export_folder_list.append(name) for name in os.listdir(exports_parent_folder) if name[0] != '.']
+                self.export_number = export_folder_list[-1]
+
+            export_folder_path = os.path.join(exports_parent_folder, self.export_number)
+            return export_folder_path
+
+    def set_recording_folder(self):
+        '''
+        :param pupil_session_idx:  the index of the pupil session to use with respect to the list of folders in the
+        # session directoy.  Typically, these start at 000 and go up from there.
+
+        :return: void
+        '''
+
+        def get_highest_value_folder(parent_folder):
+            sub_folder_list = []
+            [sub_folder_list.append(name) for name in os.listdir(parent_folder) if name[0] != '.']
+            if len(sub_folder_list) == 0:
+                logger.warning('No sub folders found in ' + parent_folder)
+                return False
+            return sub_folder_list[-1]
+
+        # Defaults to the last session
+        if self.session_number is False:
+            self.session_number = get_highest_value_folder(self.pupil_labs_parent_folder)
+
+        session_folder = os.path.join(self.pupil_labs_parent_folder, self.session_number, 'PupilData')
+
+        # Defaults to the last recording
+        if self.recording_number is False:
+            recording_folder_list = []
+            self.recording_number = get_highest_value_folder(session_folder)
+
+        recording_folder = os.path.join(session_folder, self.recording_number)
+
+        return recording_folder
+
+    def add_visualization(self,
+                          index,
+                          current_bgr,
+                          visualize_as,
+                          algo_supports_cuda,
+                          upper_mag_threshold=False,
+                          lower_mag_threshold=False,
+                          vector_scalar=1):
+
+        if visualize_as in ['hsv_stacked']:
+            logger.exception('This visualization method is not available for pupil labs data folders')
+
+        if visualize_as == 'gaze-centered_hsv':
+            visualize_as = 'hsv_overlay'
+        elif visualize_as == 'gaze-centered_vectors':
+            visualize_as = 'hsv_overlay'
+        elif visualize_as == 'gaze-centered_streamlines':
+            visualize_as = 'streamlines'
+
+        if 'gaze-centered' in visualize_as:
+            current_bgr = self.recenter_frame_on_gaze(current_bgr, index)
+
+        if algo_supports_cuda and self.cuda_enabled:
+            self.current_gpu.upload(current_bgr)
+            self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
+        else:
+            self.current_gray = cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY)
+
+        image_out = super().add_visualization(index,
+                                              current_bgr,
+                                              visualize_as,
+                                              algo_supports_cuda,
+                                              upper_mag_threshold=upper_mag_threshold,
+                                              lower_mag_threshold=lower_mag_threshold,
+                                              vector_scalar=vector_scalar)
+
+        return image_out
 
 if __name__ == "__main__":
+
     # a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
     # source = pupil_labs_source(a_file_path,recording_number='007')
     # source.cuda_enabled = True
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=False,
+    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.5,
     #                       upper_mag_threshold=25,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=True)
+    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
 
 
     # a_file_path = os.path.join("pupil_labs_data", "cb1")
@@ -890,22 +866,25 @@ if __name__ == "__main__":
     #                       upper_mag_threshold=25,
     #                       vector_scalar=3, save_input_images=False, save_output_images=True)
 
-    a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
-    source = video_source(a_file_path)
+
+
+    a_file_path = os.path.join("pupil_labs_data", "cb13")
+    source = pupil_labs_source(a_file_path)
     source.calculate_flow(algorithm='nvidia2',
                           visualize_as="hsv_overlay",
-                          lower_mag_threshold = 5,
-                          upper_mag_threshold = 25,
+                          lower_mag_threshold = 1,
+                          upper_mag_threshold = 35,
                           vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=False)
 
     #
 
-    #a_file_path = os.path.join("videos", "640_480_60Hz.mp4")
-    # a_file_path = os.path.join("pupil_labs_data","GD-Short-Driving-Video","S001","PupilData","007","world.mp4")
+    # a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
+    # #a_file_path = os.path.join("videos", "640_480_60Hz.mp4")
+    # # a_file_path = os.path.join("pupil_labs_data","GD-Short-Driving-Video","S001","PupilData","007","world.mp4")
     # source = video_source(a_file_path)
     # source.cuda_enabled = True
-    # source.calculate_flow(algorithm='tvl1', visualize_as="hsv_overlay", lower_mag_threshold = False, upper_mag_threshold=25,
-    #                        vector_scalar=3, save_input_images=False, save_output_images=True)
+    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold = False, upper_mag_threshold=25,
+    #                        vector_scalar=3, save_input_images=False, save_output_images=False)
 
     #
     # a_file_path = os.path.join("demo_input_video", "moving_sphere.mp4")
