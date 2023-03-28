@@ -1,5 +1,9 @@
 /flow_out
 /videos
+/pupil_labs_data
+*.mp4
+!linear_travel.mp4
+!moving_sphere.mp4
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

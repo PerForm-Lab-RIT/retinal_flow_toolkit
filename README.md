@@ -3,25 +3,25 @@
 
 A simple module for the calculation of optic flow.  
 
-The most relevant file is flow_source.py, in which lives the flow_source class for converting a video into optic flow.  You also have the option of saving out intermediate frames of image data.
+The most relevant file is video_source.py, in which lives the video_source class for converting a video into optic flow.  You also have the option of saving out intermediate frames of image data.
 
 It will take advantage of CUDA if enabled for opencv. 
 
-To run, create a flow_source object from an input movie file, and then calculate_flow()
+To run, create a video_source object from an input movie file, and then calculate_flow()
 
 ```
 a_file_path = os.path.join("demo_input_video", "linear_travel.mp4")
-source = flow_source(a_file_path)
+source = video_source(a_file_path)
 source.calculate_flow(algorithm='tvl1', visualize_as="hsv_stacked", lower_mag_threshold = False, upper_mag_threshold=25,
                            vector_scalar=3, save_input_images=False, save_output_images=False, fps = 30)
 
 ```
 
-If you don't have cuda enabled for opencv, set <flow_source>.cuda_enabled = False
+If you don't have cuda enabled for opencv, set <video_source>.cuda_enabled = False
 
 ## Flow algorithms and settings.
 
-Nothing elegant here - you'll have to go into the code for more info. I encourage the user to look at <flow_source>.create_flow_object() to see the different algorithms that are enabled, and to see the parameters for existing flow algorithms.  I have not made all parameters for all algorithms visible.  Use the opencv docs to play around.
+Nothing elegant here - you'll have to go into the code for more info. I encourage the user to look at <video_source>.create_flow_object() to see the different algorithms that are enabled, and to see the parameters for existing flow algorithms.  I have not made all parameters for all algorithms visible.  Use the opencv docs to play around.
 
 At the time of writing this, I have implemented...
 * deepflow
