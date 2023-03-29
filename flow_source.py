@@ -14,6 +14,9 @@ import subprocess
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
+from tkinter import Tk
+from tkinter.filedialog import askopenfilename
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 try:
@@ -78,7 +81,11 @@ class video_source():
         # Even if self.cuda_is_enabled=True, some algos don't support cuda!
         algo_supports_cuda = False
 
-        if algorithm == "deepflow":
+        if algorithm == False:
+            
+            return False
+
+        elif algorithm == "deepflow":
 
             self.flow_algo = cv2.optflow.createOptFlow_DeepFlow()
 
@@ -198,8 +205,10 @@ class video_source():
 
         ##############################
         # prepare video out
-
-        video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
+        if visualize_as == 'gaze_overlay':
+            video_out_name = self.source_file_name + '_gaze-overlay.mp4' 
+        else:
+            video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
 
         if os.path.isdir(self.video_out_path) is False:
             os.makedirs(self.video_out_path)
@@ -235,7 +244,7 @@ class video_source():
         # create video containers and streams
         container_in, stream_in, container_out, stream_out = self.create_containers_and_streams(algorithm, visualize_as)
 
-        video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
+        # video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
         num_frames = stream_in.frames
 
         ##############################
@@ -616,6 +625,7 @@ class pupil_labs_source(video_source):
         self.export_folder = self.set_export_folder()
 
         self.world_video_path = os.path.join(self.recording_folder, 'world.mp4')
+        self.gaze_overlay_video_out_name = False
 
         self.gaze_data = False
         self.processed_gaze_data = False
@@ -642,7 +652,7 @@ class pupil_labs_source(video_source):
                        save_midpoint_images=False,
                        save_output_images=False):
 
-        if "gaze-centered" in visualize_as and not self.gaze_data:
+        if "gaze" in visualize_as and not self.gaze_data:
             self.import_gaze_from_exports()
             self.process_gaze_data()
 
@@ -730,7 +740,20 @@ class pupil_labs_source(video_source):
 
         return new_image
 
-    def draw_gaze_in_head(self, frame, frame_index):
+    def overlay_gaze_on_video(self,file_name_out='gaze_overlay.mp4'):
+
+        Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+        self.gaze_overlay_source_video_path = askopenfilename(initialdir=self.recording_folder)  # show an "Open" dialog box and return the path to the selected file
+
+        file_path, file_name = os.path.split(self.gaze_overlay_source_video_path)
+        # self.gaze_overlay_video_out_name =  'gaze_overlay.mp4'
+        self.flow_algo = False
+
+        self.calculate_flow( video_out_name=file_name_out,
+                       algorithm=False,
+                       visualize_as='gaze_overlay')
+
+    def draw_gaze_on_frame(self, frame, frame_index):
 
         med_xy = self.get_median_gaze_for_frame(frame_index)
 
@@ -823,21 +846,23 @@ class pupil_labs_source(video_source):
         if visualize_as in ['hsv_stacked']:
             logger.exception('This visualization method is not available for pupil labs data folders')
 
-        if visualize_as == 'gaze-centered_hsv':
-            visualize_as = 'hsv_overlay'
-        elif visualize_as == 'gaze-centered_vectors':
-            visualize_as = 'hsv_overlay'
-        elif visualize_as == 'gaze-centered_streamlines':
-            visualize_as = 'streamlines'
-
         if 'gaze-centered' in visualize_as:
             current_bgr = self.recenter_frame_on_gaze(current_bgr, index)
 
-        if algo_supports_cuda and self.cuda_enabled:
-            self.current_gpu.upload(current_bgr)
-            self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
+            if visualize_as == 'gaze-centered_hsv':
+                visualize_as = 'hsv_overlay'
+            elif visualize_as == 'gaze-centered_vectors':
+                visualize_as = 'hsv_overlay'
+            elif visualize_as == 'gaze-centered_streamlines':
+                visualize_as = 'streamlines'
+
+            if algo_supports_cuda and self.cuda_enabled:
+                self.current_gpu.upload(current_bgr)
+                self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
+            else:
+                self.current_gray = cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY)
         else:
-            self.current_gray = cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY)
+            self.draw_gaze_on_frame(current_bgr,index)
 
         image_out = super().add_visualization(index,
                                               current_bgr,
@@ -870,11 +895,13 @@ if __name__ == "__main__":
 
     a_file_path = os.path.join("pupil_labs_data", "cb13")
     source = pupil_labs_source(a_file_path)
-    source.calculate_flow(algorithm='nvidia2',
-                          visualize_as="hsv_overlay",
-                          lower_mag_threshold = 1,
-                          upper_mag_threshold = 35,
-                          vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=False)
+    source.overlay_gaze_on_video('hsv_gaze')
+    
+    # source.calculate_flow(algorithm='nvidia2',
+    #                       visualize_as="hsv_overlay",
+    #                       lower_mag_threshold = 1,
+    #                       upper_mag_threshold = 35,
+    #                       vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=False)
 
     #
 
