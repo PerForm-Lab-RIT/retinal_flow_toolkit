@@ -781,7 +781,9 @@ class pupil_labs_source(video_source):
             logger.error('No gaze_positions found in the exports folder.')
 
         # Defaults to the most recent pupil export folder (highest number)
-        return pd.read_csv(gaze_positions_path)
+        self.gaze_data = pd.read_csv(gaze_positions_path)
+        
+        return True
 
     def set_export_folder(self):
 
