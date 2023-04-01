@@ -678,14 +678,14 @@ class pupil_labs_source(video_source):
 
         if len(gaze_samples_on_frame) == 0:
             # Out of frame
-            return (np.NAN, np.NAN)
+            return False
 
         median_x = np.nanmedian(gaze_samples_on_frame['norm_pos_x'])
         median_y = 1 - np.nanmedian(gaze_samples_on_frame['norm_pos_y'])
 
         if median_x < 0 or median_y < 0 or median_x > 1 or median_y > 1:
             # Out of frame
-            return (np.NAN, np.NAN)
+            return False
 
         return (median_x, median_y)
 
