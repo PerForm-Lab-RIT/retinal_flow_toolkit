@@ -194,19 +194,27 @@ class video_source():
 
         return stream
 
-    def create_containers_and_streams(self, algorithm, visualize_as):
+    def create_containers_and_streams(self, algorithm, visualize_as, input_video_path=False):
 
-        container_in = av.open(self.file_path)
+        if input_video_path == False:
+            input_video_path = self.file_path # world.mp4
+
+        container_in = av.open(input_video_path)
         average_fps = container_in.streams.video[0].average_rate
         height = container_in.streams.video[0].height
         width = container_in.streams.video[0].width
         # container_in.sort_dts = True
         # container_in.flush_packets = True
+        # container_in.ign_dts = True
+        # container_in.no_fill_in = True
+        # container_in.no_buffer = True
 
         ##############################
         # prepare video out
         if visualize_as == 'gaze_overlay':
-            video_out_name = self.source_file_name + '_gaze-overlay.mp4' 
+            path, input_video_filename = os.path.split(input_video_path)
+            input_video_filename = input_video_filename.split('.')[0]
+            video_out_name = f'{input_video_filename}_gaze_overlay.mp4'
         else:
             video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
 
@@ -214,8 +222,11 @@ class video_source():
             os.makedirs(self.video_out_path)
 
         container_out = av.open(os.path.join(self.video_out_path, video_out_name), mode="w", timeout=None)
+        container_out.ign_dts = True
 
-        stream_out = container_out.add_stream("libx264", framerate=average_fps)
+        stream_out = container_out.add_stream("h264_nvenc",framerate=average_fps)
+        #stream_out = container_out.add_stream(codec_name=container_in.streams.video[0].codec_context.name)
+
         # try:
         #     subprocess.check_output('nvidia-smi')
         #     logger.info('Nvidia GPU detected!')#
@@ -224,7 +235,7 @@ class video_source():
         #     stream_out = container_out.add_stream("libx264", framerate=average_fps)
         #     # print('No Nvidia GPU in system!  Defaulting to a different encoder')
 
-        stream_out.options["crf"] = "20"
+        stream_out.options["crf"] = "0"
         stream_out.pix_fmt = container_in.streams.video[0].pix_fmt
         stream_out.time_base = container_in.streams.video[0].time_base
         stream_out = self.set_stream_dimensions(stream_out, visualize_as, height, width)
@@ -259,7 +270,7 @@ class video_source():
 
         ##############################
         # Iterate through frames
-        for raw_frame in tqdm(container_in.decode(video=0), desc="Generating " + video_out_name, unit='frames',
+        for raw_frame in tqdm(container_in.decode(video=0), desc="Generating " + container_out.name, unit='frames',
                               total=num_frames):
             # First frame
             if raw_frame.index == 0:
@@ -373,17 +384,21 @@ class video_source():
         frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
         frame_out.time_base = rawframe_in.time_base
         frame_out.pts = rawframe_in.pts
+        # frame_out.dts = rawframe_in.dts
 
         if flush:
-            for packet_out in s_out.encode():
-                c_out.mux(packet_out)
-
+            return
+            #
+            # for packet_out in s_out.encode():
+            #     packet_out.pts = rawframe_in.pts
+            #     packet_out.dts = rawframe_in.dts
+            #     c_out.mux(packet_out)
         else:
-
             for packet_out in s_out.encode(frame_out):
                 packet_out.stream = s_out
                 packet_out.time_base = s_in.time_base
                 packet_out.pts = rawframe_in.pts
+                packet_out.dts = rawframe_in.dts
                 c_out.mux(packet_out)
 
     def flow_to_mag_angle(self, index, flow, lower_mag_threshold=False, upper_mag_threshold=False):
@@ -611,7 +626,8 @@ class pupil_labs_source(video_source):
                  session_number=False,
                  recording_number=False,
                  export_number=False,
-                 analysis_parameters_file='default_analysis_parameters.json'):
+                 analysis_parameters_file='default_analysis_parameters.json',
+                 recalculate_processed_gaze = False):
 
         self.analysis_parameters = json.load(open(analysis_parameters_file))
 
@@ -629,6 +645,14 @@ class pupil_labs_source(video_source):
 
         self.gaze_data = False
         self.processed_gaze_data = False
+
+        self.video_target_path = False# target for gaze overlay etc.
+
+        # Load processed gaze data from file
+        proc_gaze_file_path = os.path.join(self.export_folder, 'processed_gaze.pkl')
+        if recalculate_processed_gaze is False and os.path.exists(proc_gaze_file_path):
+            with open(proc_gaze_file_path, 'rb') as handle:
+                self.processed_gaze_data = pickle.load(handle)
 
         super().__init__(self.world_video_path, out_parent_dir=self.export_folder)
 
@@ -678,16 +702,16 @@ class pupil_labs_source(video_source):
 
         if len(gaze_samples_on_frame) == 0:
             # Out of frame
-            return False
+            return (np.NAN, np.NAN)
 
         median_x = np.nanmedian(gaze_samples_on_frame['norm_pos_x'])
         median_y = 1 - np.nanmedian(gaze_samples_on_frame['norm_pos_y'])
 
         if median_x < 0 or median_y < 0 or median_x > 1 or median_y > 1:
             # Out of frame
-            return False
+            return (np.NAN, np.NAN)
 
-        return (median_x, median_y)
+        return median_x, median_y
 
     def process_gaze_data(self):
 
@@ -697,8 +721,13 @@ class pupil_labs_source(video_source):
         med_x, med_y = zip(*med_xy)
 
         processed_gaze_data = pd.DataFrame({'median_x': med_x, 'median_y': med_y})
-        # processed_gaze_data.rolling(3).median()
-        processed_gaze_data.rolling(3).apply(lambda x: np.nanmean(x))
+
+        processed_gaze_data.rolling(3).apply(lambda x: np.nanmean(x)) # magic number!
+
+        # Save processed gaze to export folder
+        proc_gaze_file_path = os.path.join(self.export_folder, 'processed_gaze.pkl')
+        with open(proc_gaze_file_path, 'wb') as handle:
+            pickle.dump(processed_gaze_data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         self.processed_gaze_data = processed_gaze_data
 
@@ -740,41 +769,34 @@ class pupil_labs_source(video_source):
 
         return new_image
 
-    def overlay_gaze_on_video(self,file_name_out='gaze_overlay.mp4'):
+    def overlay_gaze_on_frame(self, frame_in, frame_index):
 
-        Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
-        self.gaze_overlay_source_video_path = askopenfilename(initialdir=self.recording_folder)  # show an "Open" dialog box and return the path to the selected file
+        if not type(self.processed_gaze_data) == pd.DataFrame:
+            self.import_gaze_from_exports()
+            self.process_gaze_data()
 
-        file_path, file_name = os.path.split(self.gaze_overlay_source_video_path)
-        # self.gaze_overlay_video_out_name =  'gaze_overlay.mp4'
-        self.flow_algo = False
+        if frame_index - 1 in self.processed_gaze_data.index:
 
-        self.calculate_flow( video_out_name=file_name_out,
-                       algorithm=False,
-                       visualize_as='gaze_overlay')
+            med_xy = self.processed_gaze_data.loc[frame_index-1]
 
-    def draw_gaze_on_frame(self, frame, frame_index):
+            if not np.isnan(med_xy['median_x']) and not np.isnan(med_xy['median_y']):
 
-        med_xy = self.get_median_gaze_for_frame(frame_index)
+                median_x = med_xy['median_x']
+                median_y = med_xy['median_y']
 
-        if med_xy:
+                height = np.shape(frame_in)[0]
+                width = np.shape(frame_in)[1]
 
-            median_x, median_y = med_xy
+                frame = cv2.line(frame_in, (int(width * median_x), 0), (int(width * median_x), height),
+                                 (255, 0, 0, 1), thickness=2)
 
-            height = np.shape(frame)[0]
-            width = np.shape(frame)[1]
+                frame = cv2.line(frame_in, (0, int(height * median_y)), (width, int(height * median_y)),
+                                 (255, 0, 0, 1), thickness=2)
 
-            frame = cv2.line(frame, (int(width * median_x), 0), (int(width * median_x), height),
-                             (255, 0, 0), thickness=2)
-
-            frame = cv2.line(frame, (0, int(height * median_y)), (width, int(height * median_y)),
-                             (255, 0, 0), thickness=2)
-
-            cv2.imwrite('temp.png', frame, [cv2.IMWRITE_PNG_COMPRESSION, 0])
-
-            return frame
+        return frame_in
 
     def import_gaze_from_exports(self):
+
         gaze_positions_path = os.path.join(self.export_folder, 'gaze_positions.csv')
 
         if os.path.exists(gaze_positions_path) is False:
@@ -864,7 +886,7 @@ class pupil_labs_source(video_source):
             else:
                 self.current_gray = cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY)
         else:
-            self.draw_gaze_on_frame(current_bgr,index)
+            self.overlay_gaze_on_frame(current_bgr,index)
 
         image_out = super().add_visualization(index,
                                               current_bgr,
@@ -876,15 +898,136 @@ class pupil_labs_source(video_source):
 
         return image_out
 
+
+    def overlay_gaze_on_video(self, input_video=False, file_name_out='gaze_overlay.mp4'):
+
+        Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+        input_video_fullpath = askopenfilename(title="Select the video on which to overlay gaze",
+                                               initialdir=self.recording_folder)
+
+        input_video_path, input_video_filename = os.path.split(input_video_fullpath)
+        input_video_filename = input_video_filename.split('.')[0]
+        file_name_out = f'{input_video_filename}_gaze_overlay.mp4'
+
+        # return container_in, container_in.streams.video[0], container_out, stream_out
+        container_in, stream_in, container_out, stream_out = \
+            self.create_containers_and_streams(algorithm=False, visualize_as='gaze_overlay',
+                                               input_video_path=input_video_fullpath)
+
+        num_frames = stream_in.frames
+
+        for raw_frame in tqdm(container_in.decode(video=0), desc=f'Generating {self.export_folder}/{file_name_out}',
+                              unit='frames', total=num_frames):
+
+            current_bgr = raw_frame.to_ndarray(format='bgr24')
+            current_bgr_processed = self.preprocess_frame(current_bgr)
+
+            overlay_frame = self.overlay_gaze_on_frame(current_bgr_processed, raw_frame.index)
+
+            self.encode_frame(container_out, stream_out, overlay_frame, raw_frame, stream_in)
+
+        self.encode_frame(container_out, stream_out, current_bgr_processed, raw_frame, stream_in, flush=True)
+
+        container_out.close()
+        container_in.close()
+
+    def set_video_target(self, file_path=False):
+
+        if not file_path:
+            Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+            file_path = askopenfilename(title="Select the video target",
+                                        initialdir=self.recording_folder)
+
+        self.video_target_path = file_path
+        return True
+
+    def play_vector_histogram(self):
+
+        from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+        from matplotlib.figure import Figure
+
+        # if self.video_target_path == False:
+        #     self.set_video_target()
+
+
+        #fig = Figure()
+        dpi = 100
+        fig, ax = plt.subplots(figsize=(640./dpi, 480./dpi), subplot_kw=dict(projection='polar'))
+        canvas = FigureCanvas(fig)
+        # ax.set_rscale('symlog')
+        ax.margins(0)
+        # ax.set_ylim(.005)
+
+        from pathlib import Path
+        p = Path(
+            'D:/Github/retinal_flow_toolkit/pupil_labs_data/GD-Short-Driving-Video/S001/PupilData/007/exports/003/world_nvidia2_hsv_overlay.mp4').as_posix()
+        source.set_video_target(p)
+        video = cv2.VideoCapture(source.video_target_path)
+        count = 0
+        success = 1
+
+        hist_params = (16, 0, 360)
+        buffer_len = 10
+        counts_fifo = np.zeros(16,buffer_len)
+
+        while success:
+
+            success, image = video.read()
+
+            if success:
+                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+                h = hsv_image[..., 0]
+                s = hsv_image[..., 1]
+                v = hsv_image[..., 2]
+
+                hue_flat = h.flatten()
+                hue_flat = hue_flat[hue_flat > 0]
+                scaled_hue = hue_flat * 2.0 #v.flatten()[h.flatten() > 0]
+
+                # ax = plt.subplot(111, polar=True)
+
+
+                frame_counts, bins = np.histogram(hue_flat * 2.0, hist_params[0], (hist_params[1], hist_params[2]));
+
+                if count = < 1:
+                    counts =
+
+                bars = ax.bar(bins[:-1], counts, bottom=0.0)
+
+                # for bar in bars:
+                #     bar.set_facecolor('b')
+                #     bar.set_alpha(0.5)
+
+                canvas.draw()  # draw the canvas, cache the renderer
+                image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+                cv2.imshow(f'Image', np.vstack([image, image_from_plot]))
+                key = cv2.waitKey(500)  # pauses for N ms before fetching next image
+                if key == 27:  # if ESC is pressed, exit loop
+                    cv2.destroyAllWindows()
+                    break
+
+                plt.cla()
+
+
+            #     cv2.imwrite(f"{img_out_path}/{count}.jpg", image)
+
+            count = count + 1
+
+
 if __name__ == "__main__":
 
-    # a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
-    # source = pupil_labs_source(a_file_path,recording_number='007')
-    # source.cuda_enabled = True
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.5,
+    a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
+    #a_file_path = os.path.join("pupil_labs_data", "cb13")
+    source = pupil_labs_source(a_file_path) #recording_number='001')
+    source.cuda_enabled = True
+
+    source.play_vector_histogram()
+    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.1,
     #                       upper_mag_threshold=25,
     #                       vector_scalar=3, save_input_images=False, save_output_images=False)
 
+    # source.overlay_gaze_on_video('hsv_gaze-overlay')
 
     # a_file_path = os.path.join("pupil_labs_data", "cb1")
     # source = pupil_labs_source(a_file_path)
@@ -895,9 +1038,9 @@ if __name__ == "__main__":
 
 
 
-    a_file_path = os.path.join("pupil_labs_data", "cb13")
-    source = pupil_labs_source(a_file_path)
-    source.overlay_gaze_on_video('hsv_gaze')
+    # a_file_path = os.path.join("pupil_labs_data", "cb13")
+    # source = pupil_labs_source(a_file_path)
+    # source.overlay_gaze_on_video('hsv_gaze')
     
     # source.calculate_flow(algorithm='nvidia2',
     #                       visualize_as="hsv_overlay",
