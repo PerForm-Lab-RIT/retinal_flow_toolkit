@@ -57,6 +57,7 @@ class video_source():
         self.video_out_path = os.path.join(out_parent_dir, self.source_file_name)
         self.magnitude_out_path = os.path.join(out_parent_dir, self.source_file_name, 'magnitude_data')
 
+        self.video_target_path = False
         self.cumulative_mag_hist = None
         self.magnitude_bins = None
         self.hist_params = (100, 0, 40)
@@ -203,11 +204,11 @@ class video_source():
         average_fps = container_in.streams.video[0].average_rate
         height = container_in.streams.video[0].height
         width = container_in.streams.video[0].width
-        # container_in.sort_dts = True
-        # container_in.flush_packets = True
+        container_in.sort_dts = True
+        container_in.flush_packets = True
         # container_in.ign_dts = True
-        # container_in.no_fill_in = True
-        # container_in.no_buffer = True
+        container_in.no_fill_in = True
+        container_in.no_buffer = True
 
         ##############################
         # prepare video out
@@ -235,7 +236,7 @@ class video_source():
         #     stream_out = container_out.add_stream("libx264", framerate=average_fps)
         #     # print('No Nvidia GPU in system!  Defaulting to a different encoder')
 
-        stream_out.options["crf"] = "0"
+        stream_out.options["crf"] = "10"
         stream_out.pix_fmt = container_in.streams.video[0].pix_fmt
         stream_out.time_base = container_in.streams.video[0].time_base
         stream_out = self.set_stream_dimensions(stream_out, visualize_as, height, width)
@@ -340,7 +341,7 @@ class video_source():
                             image_out)
 
         # Flush stream
-        self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in, flush=True)
+        # self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in, flush=True)
 
         # Close the file
         container_out.close()
@@ -387,18 +388,17 @@ class video_source():
         # frame_out.dts = rawframe_in.dts
 
         if flush:
-            return
-            #
-            # for packet_out in s_out.encode():
-            #     packet_out.pts = rawframe_in.pts
-            #     packet_out.dts = rawframe_in.dts
-            #     c_out.mux(packet_out)
+
+            for packet_out in s_out.encode():
+                # packet_out.pts = rawframe_in.pts
+                # packet_out.dts = rawframe_in.dts
+                c_out.mux(packet_out)
         else:
             for packet_out in s_out.encode(frame_out):
                 packet_out.stream = s_out
                 packet_out.time_base = s_in.time_base
                 packet_out.pts = rawframe_in.pts
-                packet_out.dts = rawframe_in.dts
+                # packet_out.dts = rawframe_in.dts
                 c_out.mux(packet_out)
 
     def flow_to_mag_angle(self, index, flow, lower_mag_threshold=False, upper_mag_threshold=False):
@@ -617,7 +617,87 @@ class video_source():
 
         return cv2.addWeighted(frame, 0.5, mask, 0.5, 0)
 
+    def set_video_target(self, file_path=False):
 
+        if not file_path:
+            Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+            file_path = askopenfilename(title="Select the video target",
+                                        initialdir=self.recording_folder)
+
+        self.video_target_path = file_path
+        return True
+
+    def play_vector_histogram(self):
+
+        from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+        from matplotlib.figure import Figure
+
+        # if self.video_target_path == False:
+        #     self.set_video_target()
+
+
+        #fig = Figure()
+        dpi = 100
+        fig, ax = plt.subplots(figsize=(640./dpi, 480./dpi), subplot_kw=dict(projection='polar'))
+        canvas = FigureCanvas(fig)
+        # ax.set_rscale('symlog')
+        ax.margins(0)
+        # ax.set_ylim(.005)
+
+        from pathlib import Path
+        p = Path(
+            'D:/Github/retinal_flow_toolkit/pupil_labs_data/GD-Short-Driving-Video/S001/PupilData/007/exports/003/world_nvidia2_hsv_overlay.mp4').as_posix()
+        source.set_video_target(p)
+        video = cv2.VideoCapture(source.video_target_path)
+        count = 0
+        success = 1
+
+        hist_params = (16, 0, 360)
+        buffer_len = 10
+        counts_fifo = np.zeros(16,buffer_len)
+
+        while success:
+
+            success, image = video.read()
+
+            if success:
+                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+                h = hsv_image[..., 0]
+                s = hsv_image[..., 1]
+                v = hsv_image[..., 2]
+
+                hue_flat = h.flatten()
+                hue_flat = hue_flat[hue_flat > 0]
+                scaled_hue = hue_flat * 2.0 #v.flatten()[h.flatten() > 0]
+
+                # ax = plt.subplot(111, polar=True)
+
+                frame_counts, bins = np.histogram(hue_flat * 2.0, hist_params[0], (hist_params[1], hist_params[2]));
+
+                # if count = < 1:
+                #     counts =
+
+                bars = ax.bar(bins[:-1], counts, bottom=0.0)
+
+                # for bar in bars:
+                #     bar.set_facecolor('b')
+                #     bar.set_alpha(0.5)
+
+                canvas.draw()  # draw the canvas, cache the renderer
+                image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+                cv2.imshow(f'Image', np.vstack([image, image_from_plot]))
+                key = cv2.waitKey(500)  # pauses for N ms before fetching next image
+                if key == 27:  # if ESC is pressed, exit loop
+                    cv2.destroyAllWindows()
+                    break
+
+                plt.cla()
+
+
+            #     cv2.imwrite(f"{img_out_path}/{count}.jpg", image)
+
+            count = count + 1
 
 
 class pupil_labs_source(video_source):
@@ -645,8 +725,6 @@ class pupil_labs_source(video_source):
 
         self.gaze_data = False
         self.processed_gaze_data = False
-
-        self.video_target_path = False# target for gaze overlay etc.
 
         # Load processed gaze data from file
         proc_gaze_file_path = os.path.join(self.export_folder, 'processed_gaze.pkl')
@@ -931,101 +1009,21 @@ class pupil_labs_source(video_source):
         container_out.close()
         container_in.close()
 
-    def set_video_target(self, file_path=False):
-
-        if not file_path:
-            Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
-            file_path = askopenfilename(title="Select the video target",
-                                        initialdir=self.recording_folder)
-
-        self.video_target_path = file_path
-        return True
-
-    def play_vector_histogram(self):
-
-        from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-        from matplotlib.figure import Figure
-
-        # if self.video_target_path == False:
-        #     self.set_video_target()
-
-
-        #fig = Figure()
-        dpi = 100
-        fig, ax = plt.subplots(figsize=(640./dpi, 480./dpi), subplot_kw=dict(projection='polar'))
-        canvas = FigureCanvas(fig)
-        # ax.set_rscale('symlog')
-        ax.margins(0)
-        # ax.set_ylim(.005)
-
-        from pathlib import Path
-        p = Path(
-            'D:/Github/retinal_flow_toolkit/pupil_labs_data/GD-Short-Driving-Video/S001/PupilData/007/exports/003/world_nvidia2_hsv_overlay.mp4').as_posix()
-        source.set_video_target(p)
-        video = cv2.VideoCapture(source.video_target_path)
-        count = 0
-        success = 1
-
-        hist_params = (16, 0, 360)
-        buffer_len = 10
-        counts_fifo = np.zeros(16,buffer_len)
-
-        while success:
-
-            success, image = video.read()
-
-            if success:
-                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-                h = hsv_image[..., 0]
-                s = hsv_image[..., 1]
-                v = hsv_image[..., 2]
-
-                hue_flat = h.flatten()
-                hue_flat = hue_flat[hue_flat > 0]
-                scaled_hue = hue_flat * 2.0 #v.flatten()[h.flatten() > 0]
-
-                # ax = plt.subplot(111, polar=True)
-
-
-                frame_counts, bins = np.histogram(hue_flat * 2.0, hist_params[0], (hist_params[1], hist_params[2]));
-
-                if count = < 1:
-                    counts =
-
-                bars = ax.bar(bins[:-1], counts, bottom=0.0)
-
-                # for bar in bars:
-                #     bar.set_facecolor('b')
-                #     bar.set_alpha(0.5)
-
-                canvas.draw()  # draw the canvas, cache the renderer
-                image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-                image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-                cv2.imshow(f'Image', np.vstack([image, image_from_plot]))
-                key = cv2.waitKey(500)  # pauses for N ms before fetching next image
-                if key == 27:  # if ESC is pressed, exit loop
-                    cv2.destroyAllWindows()
-                    break
-
-                plt.cla()
-
-
-            #     cv2.imwrite(f"{img_out_path}/{count}.jpg", image)
-
-            count = count + 1
 
 
 if __name__ == "__main__":
 
+    #a_file_path = os.path.join( "videos","heading_fixed.mp4")
     a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
     #a_file_path = os.path.join("pupil_labs_data", "cb13")
-    source = pupil_labs_source(a_file_path) #recording_number='001')
+    #source = pupil_labs_source(a_file_path) #recording_number='001')
+    source = pupil_labs_source(a_file_path)
     source.cuda_enabled = True
 
-    source.play_vector_histogram()
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.1,
-    #                       upper_mag_threshold=25,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
+    # source.play_vector_histogram()
+    source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.1,
+                          upper_mag_threshold=10,
+                          vector_scalar=3, save_input_images=False, save_output_images=False)
 
     # source.overlay_gaze_on_video('hsv_gaze-overlay')
 
