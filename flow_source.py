@@ -55,6 +55,7 @@ class video_source():
         self.mid_frames_out_path = os.path.join(out_parent_dir, self.source_file_name, 'mid_images')
         self.flow_frames_out_path = os.path.join(out_parent_dir, self.source_file_name, 'flow')
         self.video_out_path = os.path.join(out_parent_dir, self.source_file_name)
+        self.video_out_name = False
         self.magnitude_out_path = os.path.join(out_parent_dir, self.source_file_name, 'magnitude_data')
 
         self.video_target_path = False
@@ -179,10 +180,6 @@ class video_source():
 
         return algo_supports_cuda
 
-    # def add_visualization(self, raw_frame, frame, flow, magnitude, angle, visualize_as, upper_mag_threshold, mask=None,
-    #                           image_1_gray=None, vector_scalar=1):
-
-
 
     def set_stream_dimensions(self, stream, visualize_as, height, width):
 
@@ -195,53 +192,28 @@ class video_source():
 
         return stream
 
-    def create_containers_and_streams(self, algorithm, visualize_as, input_video_path=False):
+    def create_video_objects(self,algorithm, visualize_as, input_video_path=False):
 
         if input_video_path == False:
-            input_video_path = self.file_path # world.mp4
+                input_video_path = self.file_path # world.mp4
 
-        container_in = av.open(input_video_path)
-        average_fps = container_in.streams.video[0].average_rate
-        height = container_in.streams.video[0].height
-        width = container_in.streams.video[0].width
-        container_in.sort_dts = True
-        container_in.flush_packets = True
-        # container_in.ign_dts = True
-        container_in.no_fill_in = True
-        container_in.no_buffer = True
-
-        ##############################
-        # prepare video out
         if visualize_as == 'gaze_overlay':
             path, input_video_filename = os.path.split(input_video_path)
             input_video_filename = input_video_filename.split('.')[0]
-            video_out_name = f'{input_video_filename}_gaze_overlay.mp4'
+            self.video_out_name = f'{input_video_filename}_gaze_overlay.mp4'
         else:
-            video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
+            self.video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
 
-        if os.path.isdir(self.video_out_path) is False:
-            os.makedirs(self.video_out_path)
+        video_in = cv2.VideoCapture(input_video_path)
 
-        container_out = av.open(os.path.join(self.video_out_path, video_out_name), mode="w", timeout=None)
-        container_out.ign_dts = True
+        width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = video_in.get(cv2.CAP_PROP_FPS)
 
-        stream_out = container_out.add_stream("h264_nvenc",framerate=average_fps)
-        #stream_out = container_out.add_stream(codec_name=container_in.streams.video[0].codec_context.name)
+        video_out = cv2.VideoWriter(os.path.join(self.video_out_path, self.video_out_name),cv2.VideoWriter_fourcc(*'mp4v'), fps, (width,height))
 
-        # try:
-        #     subprocess.check_output('nvidia-smi')
-        #     logger.info('Nvidia GPU detected!')#
-        #     stream_out = container_out.add_stream("h264_nvenc", framerate=average_fps)
-        # except Exception:  # this command not being found can raise quite a few different errors depending on the configuration
-        #     stream_out = container_out.add_stream("libx264", framerate=average_fps)
-        #     # print('No Nvidia GPU in system!  Defaulting to a different encoder')
+        return video_in, video_out
 
-        stream_out.options["crf"] = "10"
-        stream_out.pix_fmt = container_in.streams.video[0].pix_fmt
-        stream_out.time_base = container_in.streams.video[0].time_base
-        stream_out = self.set_stream_dimensions(stream_out, visualize_as, height, width)
-
-        return container_in, container_in.streams.video[0], container_out, stream_out
 
     def calculate_flow(self, video_out_name=False, algorithm="nvidia2", visualize_as="hsv_stacked",
                        vector_scalar=1,
@@ -254,29 +226,38 @@ class video_source():
         self.save_midpoint_images = save_midpoint_images
 
         # create video containers and streams
-        container_in, stream_in, container_out, stream_out = self.create_containers_and_streams(algorithm, visualize_as)
+        # container_in, stream_in, container_out, stream_out = self.create_containers_and_streams(algorithm, visualize_as)
+        video_in, video_out = self.create_video_objects(algorithm, visualize_as)
+        num_frames = int(video_in.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
-        num_frames = stream_in.frames
-
-        ##############################
-        # Prepare for flow calculations
-
-        algo_supports_cuda = self.init_flow(algorithm, (stream_in.height, stream_in.width))
+        width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        algo_supports_cuda = self.init_flow(algorithm, (height, width))
 
         if algo_supports_cuda and self.cuda_enabled:
             self.current_gpu = cv2.cuda_GpuMat()
             self.previous_gpu = cv2.cuda_GpuMat()
             # self.clahe = cv2.cuda.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
 
-        ##############################
-        # Iterate through frames
-        for raw_frame in tqdm(container_in.decode(video=0), desc="Generating " + container_out.name, unit='frames',
-                              total=num_frames):
-            # First frame
-            if raw_frame.index == 0:
+        count = 0
+        success = 1
 
-                prev_frame = raw_frame.to_ndarray(format='bgr24')
+
+        # ##############################
+        # # Iterate through frames
+
+        #for success, frame in tqdm(video_in.grab(), desc="Generating " + self.video_out_name, unit='frames', total=num_frames):
+        for index in tqdm(range(num_frames), desc="Generating " + self.video_out_name, unit='frames', total=num_frames):
+
+            success, frame = video_in.read()
+
+            if not success:
+                print('not success!')
+                continue
+
+            if index == 0:
+
+                prev_frame = frame
                 prev_frame = self.preprocess_frame(prev_frame)
 
                 # Apply histogram normalization.
@@ -292,18 +273,14 @@ class video_source():
                 if save_input_images:
                     if os.path.isdir(self.raw_frames_out_path) is False:
                         os.makedirs(self.raw_frames_out_path)
-                    raw_frame.to_image().save(
-                        os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
+                    frame.save(os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
 
                 # Write out a blank first frame
-                image_out = np.zeros([raw_frame.height, raw_frame.width, 3], dtype=np.uint8)
-
-                self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in)
+                image_out = np.zeros([np.shape(frame)[0], np.shape(frame)[1], 3], dtype=np.uint8)
+                video_out.write(image_out)
                 continue
-
             else:
-                current_bgr = raw_frame.to_ndarray(format='bgr24')
-                current_bgr_processed = self.preprocess_frame(current_bgr)
+                current_bgr_processed = self.preprocess_frame(frame)
 
             if algo_supports_cuda and self.cuda_enabled:
                 self.current_gpu.upload(current_bgr_processed)
@@ -311,7 +288,7 @@ class video_source():
             else:
                 self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
 
-            image_out = self.add_visualization(raw_frame.index,
+            image_out = self.add_visualization(index,
                                                current_bgr_processed,
                                                visualize_as,
                                                algo_supports_cuda=algo_supports_cuda,
@@ -319,7 +296,7 @@ class video_source():
                                                upper_mag_threshold=upper_mag_threshold)
 
             # Add packet to video
-            self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in)
+            video_out.write(image_out)
 
             if self.cuda_enabled:
                 self.previous_gpu = self.current_gpu.clone()
@@ -330,22 +307,18 @@ class video_source():
             if save_input_images:
                 if os.path.isdir(self.raw_frames_out_path) is False:
                     os.makedirs(self.raw_frames_out_path)
-                cv2.imwrite(str(os.path.join(self.raw_frames_out_path, 'frame-{}.png'.format(raw_frame.index))),
+                cv2.imwrite(str(os.path.join(self.raw_frames_out_path, 'frame-{}.png'.format(index))),
                             current_bgr_processed)
 
             # Save output images?
             if save_output_images:
                 if os.path.isdir(self.flow_frames_out_path) is False:
                     os.makedirs(self.flow_frames_out_path)
-                cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(raw_frame.index))),
+                cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(index))),
                             image_out)
 
-        # Flush stream
-        # self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in, flush=True)
-
-        # Close the file
-        container_out.close()
-        container_in.close()
+        video_out.release()
+        video_in.release()
 
         self.save_out_mag_histogram(algorithm, visualize_as)
 
@@ -380,26 +353,7 @@ class video_source():
 
         return flow, magnitude, angle
 
-    def encode_frame(self, c_out, s_out, image_out, rawframe_in, s_in, flush = False):
 
-        frame_out = av.VideoFrame.from_ndarray(image_out, format='bgr24')
-        frame_out.time_base = rawframe_in.time_base
-        frame_out.pts = rawframe_in.pts
-        # frame_out.dts = rawframe_in.dts
-
-        if flush:
-
-            for packet_out in s_out.encode():
-                # packet_out.pts = rawframe_in.pts
-                # packet_out.dts = rawframe_in.dts
-                c_out.mux(packet_out)
-        else:
-            for packet_out in s_out.encode(frame_out):
-                packet_out.stream = s_out
-                packet_out.time_base = s_in.time_base
-                packet_out.pts = rawframe_in.pts
-                # packet_out.dts = rawframe_in.dts
-                c_out.mux(packet_out)
 
     def flow_to_mag_angle(self, index, flow, lower_mag_threshold=False, upper_mag_threshold=False):
 
@@ -642,7 +596,8 @@ class video_source():
         canvas = FigureCanvas(fig)
         # ax.set_rscale('symlog')
         ax.margins(0)
-        # ax.set_ylim(.005)
+
+
 
         from pathlib import Path
         p = Path(
@@ -652,47 +607,60 @@ class video_source():
         count = 0
         success = 1
 
-        hist_params = (16, 0, 360)
-        buffer_len = 10
-        counts_fifo = np.zeros(16,buffer_len)
+        hist_params = (4, 0, 360)
+        #buffer_len = 10
+        # counts_fifo = np.zeros([16,buffer_len])
 
         while success:
 
             success, image = video.read()
 
             if success:
+                plt.cla()
+                ax.set_ylim([0, 250])
                 hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+                hsv_image[0:250, :,2] = 0
+                hsv_image[0:250, :, 0] = 0
+                image[ 0:250, :,:] = 0
+
                 h = hsv_image[..., 0]
-                s = hsv_image[..., 1]
-                v = hsv_image[..., 2]
+
+                #s = hsv_image[..., 1]
+                #v = hsv_image[..., 2]
 
                 hue_flat = h.flatten()
                 hue_flat = hue_flat[hue_flat > 0]
                 scaled_hue = hue_flat * 2.0 #v.flatten()[h.flatten() > 0]
 
-                # ax = plt.subplot(111, polar=True)
+                #counts, bins = np.histogram(hue_flat * 2.0, hist_params[0], (hist_params[1], hist_params[2]));
+                bins = np.linspace(0,360,9)
+                counts = []
+                import bisect
 
-                frame_counts, bins = np.histogram(hue_flat * 2.0, hist_params[0], (hist_params[1], hist_params[2]));
+                for i in range(len(bins)-1):
+                    lower_bound_i = bisect.bisect_left(hue_flat, bins[i])
+                    upper_bound_i = bisect.bisect_right(hue_flat, bins[i+1], lo=lower_bound_i)
+                    nums = hue_flat[lower_bound_i:upper_bound_i]
+                    counts.append(np.mean(nums))
 
-                # if count = < 1:
-                #     counts =
+                counts = np.nan_to_num(counts)
+                # if not np.sum(np.isnan(counts)) == len(counts):
+                bars = ax.bar(bins[:-1], counts)
 
-                bars = ax.bar(bins[:-1], counts, bottom=0.0)
-
-                # for bar in bars:
-                #     bar.set_facecolor('b')
-                #     bar.set_alpha(0.5)
+                for bar in bars:
+                    bar.set_facecolor('b')
+                    bar.set_alpha(0.5)
 
                 canvas.draw()  # draw the canvas, cache the renderer
                 image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
                 image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
                 cv2.imshow(f'Image', np.vstack([image, image_from_plot]))
-                key = cv2.waitKey(500)  # pauses for N ms before fetching next image
+                key = cv2.waitKey(100)  # pauses for N ms before fetching next image
                 if key == 27:  # if ESC is pressed, exit loop
                     cv2.destroyAllWindows()
                     break
 
-                plt.cla()
+
 
 
             #     cv2.imwrite(f"{img_out_path}/{count}.jpg", image)
@@ -1014,15 +982,15 @@ class pupil_labs_source(video_source):
 if __name__ == "__main__":
 
     #a_file_path = os.path.join( "videos","heading_fixed.mp4")
-    a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
-    #a_file_path = os.path.join("pupil_labs_data", "cb13")
-    #source = pupil_labs_source(a_file_path) #recording_number='001')
-    source = pupil_labs_source(a_file_path)
+    #a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
+    a_file_path = os.path.join("pupil_labs_data", "cb13")
+    source = pupil_labs_source(a_file_path) #recording_number='001')
+    #source = pupil_labs_source(a_file_path)v v  
     source.cuda_enabled = True
 
-    # source.play_vector_histogram()
+    #source.play_vector_histogram()
     source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.1,
-                          upper_mag_threshold=10,
+                          upper_mag_threshold=20,
                           vector_scalar=3, save_input_images=False, save_output_images=False)
 
     # source.overlay_gaze_on_video('hsv_gaze-overlay')
