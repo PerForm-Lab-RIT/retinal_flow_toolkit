@@ -445,9 +445,45 @@ class video_source():
 
     @staticmethod
     def preprocess_frame(frame):
-        # thresh1, frame = cv2.threshold(frame, 25, 255, cv2.THRESH_TOZERO)
-        _, mask = cv2.threshold(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 30, 250, cv2.THRESH_TOZERO)
-        frame = cv2.bitwise_and(frame, frame, mask=mask)
+
+        def create_sky_mask_on_hsv(hsv_in):
+            lower = np.array([100, 45, 100])
+            upper = np.array([120, 140, 260])
+
+            mask = cv2.inRange(hsv_in, lower, upper)
+            mask = 255 - mask
+
+            return mask
+
+        def create_road_mask_on_hsv(hsv_in):
+
+            lower = np.array([0, 240, 200])
+            upper = np.array([40, 255, 255])
+            mask1 = cv2.inRange(hsv, lower, upper)
+
+            lower = np.array([170, 200, 100])
+            upper = np.array([180, 255, 255])
+            mask2 = cv2.inRange(hsv, lower, upper)
+
+            mask = mask1 + mask2
+            mask = np.clip(mask, 0, 255).astype(np.uint8)
+
+            mask = cv2.dilate(mask, kernel=np.ones((5, 5), np.uint8), iterations=2)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel=np.ones((5, 5), np.uint8))
+            mask = 255 - mask
+
+            return mask
+
+        def remove_noise_bgr_dark_patches(bgr_image):
+            _, mask = cv2.threshold(cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY), 30, 250, cv2.THRESH_TOZERO)
+            bgr_image = cv2.bitwise_and(bgr_image, bgr_image, mask=mask)
+            return bgr_image
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        frame = cv2.bitwise_and(frame, frame, mask=create_sky_mask_on_hsv(hsv))
+        frame = cv2.bitwise_and(frame, frame, mask=create_road_mask_on_hsv(hsv))
+
+        frame = remove_noise_bgr_dark_patches(frame)
         return frame
 
     def add_visualization(self,
@@ -571,24 +607,27 @@ class video_source():
 
         return cv2.addWeighted(frame, 0.5, mask, 0.5, 0)
 
-    def set_video_target(self, file_path=False):
+    def set_video_target(self, initial_dir=False, file_path=False):
 
         if not file_path:
-            Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
-            file_path = askopenfilename(title="Select the video target",
-                                        initialdir=self.recording_folder)
+            if initial_dir:
+                Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+                file_path = askopenfilename(title="Select the video target",
+                                            initialdir=initial_dir)
+            else:
+                Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+                file_path = askopenfilename(title="Select the video target")
 
         self.video_target_path = file_path
         return True
 
     def play_vector_histogram(self):
 
+        from matplotlib import cm
         from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-        from matplotlib.figure import Figure
 
         # if self.video_target_path == False:
         #     self.set_video_target()
-
 
         #fig = Figure()
         dpi = 100
@@ -597,19 +636,32 @@ class video_source():
         # ax.set_rscale('symlog')
         ax.margins(0)
 
-
-
-        from pathlib import Path
-        p = Path(
-            'D:/Github/retinal_flow_toolkit/pupil_labs_data/GD-Short-Driving-Video/S001/PupilData/007/exports/003/world_nvidia2_hsv_overlay.mp4').as_posix()
-        source.set_video_target(p)
+        # from pathlib import Path
+        # p = Path(
+        #     #'D:/Github/retinal_flow_toolkit/pupil_labs_data/cb13/S001/PupilData/000/exports/000/cb13_world_nvidia2_hsv_overlay.mp4'
+        #     'D:\Github\retinal_flow_toolkit\demo_input_video\dash_cam.mp4'
+        #     ).as_posix()
+        source.set_video_target(initial_dir=self.video_out_path)
         video = cv2.VideoCapture(source.video_target_path)
         count = 0
         success = 1
 
-        hist_params = (4, 0, 360)
-        #buffer_len = 10
-        # counts_fifo = np.zeros([16,buffer_len])
+        hist_params = (4 * 4, 0, 360)
+        bins = np.linspace(hist_params[1], hist_params[2], hist_params[0] + 1)
+
+        cvals = bins[:-1] / 359.0 + .5
+        cvals[cvals > 1] = cvals[cvals > 1] - 1
+        hsv_map = cm.get_cmap('hsv').reversed()
+        bar_colors = hsv_map(cvals)
+
+        from collections import deque
+        bin_rad_hist = deque( maxlen=10)
+
+        f = 0  # right turn, high flow
+        #f = 17916  # lef turn, high flow
+        #f = 15725  # right turn, med flo
+
+        video.set(cv2.CAP_PROP_POS_FRAMES, f)
 
         while success:
 
@@ -617,55 +669,43 @@ class video_source():
 
             if success:
                 plt.cla()
-                ax.set_ylim([0, 250])
+                ax.set_ylim([0, 200])
                 hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-                hsv_image[0:250, :,2] = 0
-                hsv_image[0:250, :, 0] = 0
-                image[ 0:250, :,:] = 0
 
                 h = hsv_image[..., 0]
+                v = hsv_image[..., 2]
 
-                #s = hsv_image[..., 1]
-                #v = hsv_image[..., 2]
+                mag_flat = v.flatten()[v.flatten() > 10]
+                hue_flat = h.flatten()[v.flatten() > 10]
 
-                hue_flat = h.flatten()
-                hue_flat = hue_flat[hue_flat > 0]
-                scaled_hue = hue_flat * 2.0 #v.flatten()[h.flatten() > 0]
+                # flip the direction around
+                hue_flat = hue_flat * 2.0
+                #hue_flat = hue_flat + 180
+                #hue_flat[hue_flat > 360] = hue_flat[hue_flat > 360] - 360
 
-                #counts, bins = np.histogram(hue_flat * 2.0, hist_params[0], (hist_params[1], hist_params[2]));
-                bins = np.linspace(0,360,9)
-                counts = []
-                import bisect
+                bin_rad = []
+                for b_idx in range(1, len(bins)):
+                    idx = np.where(np.logical_and(hue_flat >= bins[b_idx - 1], hue_flat <= bins[b_idx]))
+                    bin_rad.append(np.mean(mag_flat[idx]))
 
-                for i in range(len(bins)-1):
-                    lower_bound_i = bisect.bisect_left(hue_flat, bins[i])
-                    upper_bound_i = bisect.bisect_right(hue_flat, bins[i+1], lo=lower_bound_i)
-                    nums = hue_flat[lower_bound_i:upper_bound_i]
-                    counts.append(np.mean(nums))
+                bin_rad = np.nan_to_num(bin_rad)
+                bin_rad_hist.appendleft(bin_rad)
 
-                counts = np.nan_to_num(counts)
-                # if not np.sum(np.isnan(counts)) == len(counts):
-                bars = ax.bar(bins[:-1], counts)
-
-                for bar in bars:
-                    bar.set_facecolor('b')
-                    bar.set_alpha(0.5)
+                ax.bar(np.deg2rad(bins[:-1]), np.mean(bin_rad_hist,axis=0), width=2 * (np.pi / (len(bins))), color=bar_colors);
 
                 canvas.draw()  # draw the canvas, cache the renderer
                 image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
                 image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-                cv2.imshow(f'Image', np.vstack([image, image_from_plot]))
-                key = cv2.waitKey(100)  # pauses for N ms before fetching next image
+                cv2.imshow(f'Image', np.vstack([image, cv2.cvtColor(image_from_plot, cv2.COLOR_RGB2BGR)]))
+
+                key = cv2.waitKey(25)  # pauses for N ms before fetching next image
+
                 if key == 27:  # if ESC is pressed, exit loop
                     cv2.destroyAllWindows()
                     break
 
-
-
-
-            #     cv2.imwrite(f"{img_out_path}/{count}.jpg", image)
-
-            count = count + 1
+                count = count + 1
+        cv2.destroyAllWindows()
 
 
 class pupil_labs_source(video_source):
@@ -945,37 +985,37 @@ class pupil_labs_source(video_source):
         return image_out
 
 
-    def overlay_gaze_on_video(self, input_video=False, file_name_out='gaze_overlay.mp4'):
-
-        Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
-        input_video_fullpath = askopenfilename(title="Select the video on which to overlay gaze",
-                                               initialdir=self.recording_folder)
-
-        input_video_path, input_video_filename = os.path.split(input_video_fullpath)
-        input_video_filename = input_video_filename.split('.')[0]
-        file_name_out = f'{input_video_filename}_gaze_overlay.mp4'
-
-        # return container_in, container_in.streams.video[0], container_out, stream_out
-        container_in, stream_in, container_out, stream_out = \
-            self.create_containers_and_streams(algorithm=False, visualize_as='gaze_overlay',
-                                               input_video_path=input_video_fullpath)
-
-        num_frames = stream_in.frames
-
-        for raw_frame in tqdm(container_in.decode(video=0), desc=f'Generating {self.export_folder}/{file_name_out}',
-                              unit='frames', total=num_frames):
-
-            current_bgr = raw_frame.to_ndarray(format='bgr24')
-            current_bgr_processed = self.preprocess_frame(current_bgr)
-
-            overlay_frame = self.overlay_gaze_on_frame(current_bgr_processed, raw_frame.index)
-
-            self.encode_frame(container_out, stream_out, overlay_frame, raw_frame, stream_in)
-
-        self.encode_frame(container_out, stream_out, current_bgr_processed, raw_frame, stream_in, flush=True)
-
-        container_out.close()
-        container_in.close()
+    # def overlay_gaze_on_video(self, input_video=False, file_name_out='gaze_overlay.mp4'):
+    #
+    #     Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+    #     input_video_fullpath = askopenfilename(title="Select the video on which to overlay gaze",
+    #                                            initialdir=self.recording_folder)
+    #
+    #     input_video_path, input_video_filename = os.path.split(input_video_fullpath)
+    #     input_video_filename = input_video_filename.split('.')[0]
+    #     file_name_out = f'{input_video_filename}_gaze_overlay.mp4'
+    #
+    #     # return container_in, container_in.streams.video[0], container_out, stream_out
+    #     container_in, stream_in, container_out, stream_out = \
+    #         self.create_containers_and_streams(algorithm=False, visualize_as='gaze_overlay',
+    #                                            input_video_path=input_video_fullpath)
+    #
+    #     num_frames = stream_in.frames
+    #
+    #     for raw_frame in tqdm(container_in.decode(video=0), desc=f'Generating {self.export_folder}/{file_name_out}',
+    #                           unit='frames', total=num_frames):
+    #
+    #         current_bgr = raw_frame.to_ndarray(format='bgr24')
+    #         current_bgr_processed = self.preprocess_frame(current_bgr)
+    #
+    #         overlay_frame = self.overlay_gaze_on_frame(current_bgr_processed, raw_frame.index)
+    #
+    #         self.encode_frame(container_out, stream_out, overlay_frame, raw_frame, stream_in)
+    #
+    #     self.encode_frame(container_out, stream_out, current_bgr_processed, raw_frame, stream_in, flush=True)
+    #
+    #     container_out.close()
+    #     container_in.close()
 
 
 
@@ -983,15 +1023,17 @@ if __name__ == "__main__":
 
     #a_file_path = os.path.join( "videos","heading_fixed.mp4")
     #a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
-    a_file_path = os.path.join("pupil_labs_data", "cb13")
-    source = pupil_labs_source(a_file_path) #recording_number='001')
-    #source = pupil_labs_source(a_file_path)v v  
+    #a_file_path = os.path.join("pupil_labs_data", "cb13")
+    #source = pupil_labs_source(a_file_path) #recording_number='001')
+
+    a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
+    source = video_source(a_file_path)
     source.cuda_enabled = True
 
-    #source.play_vector_histogram()
-    source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.1,
-                          upper_mag_threshold=20,
-                          vector_scalar=3, save_input_images=False, save_output_images=False)
+    source.play_vector_histogram()
+    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.3,
+    #                       upper_mag_threshold=15,
+    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
 
     # source.overlay_gaze_on_video('hsv_gaze-overlay')
 

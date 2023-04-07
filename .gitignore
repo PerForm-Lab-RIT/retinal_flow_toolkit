@@ -2,6 +2,10 @@
 /videos
 /pupil_labs_data
 *.mp4
+*.png
+*.psd
+*.tif
+*.jpg
 !linear_travel.mp4
 !moving_sphere.mp4
 
