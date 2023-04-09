@@ -3,14 +3,12 @@ import json
 import os
 import sys
 import numpy as np
-import av
 import logging
 import pickle
 from tqdm import tqdm
 
 import warnings
 import pandas as pd
-import subprocess
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
@@ -608,46 +606,66 @@ class video_source():
         return cv2.addWeighted(frame, 0.5, mask, 0.5, 0)
 
     def set_video_target(self, initial_dir=False, file_path=False):
+        import wx
+        >> > d = wx.FileDialog(None)
+        >> > d.ShowModal()
 
         if not file_path:
             if initial_dir:
-                Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
-                file_path = askopenfilename(title="Select the video target",
-                                            initialdir=initial_dir)
+
+                # Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+                # file_path = askopenfilename(title="Select the video target",
+                #
+
+                #                             initialdir=initial_dir)
             else:
-                Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
-                file_path = askopenfilename(title="Select the video target")
+                title="Select the video target"
+
+                filename = g.fileopenbox( title )
+                # Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+                # file_path = askopenfilename(title="Select the video target")
 
         self.video_target_path = file_path
         return True
 
-    def play_vector_histogram(self):
+    def play_vector_histogram(self,start_frame=False):
 
         from matplotlib import cm
         from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
-        # if self.video_target_path == False:
-        #     self.set_video_target()
+        if self.video_target_path == False:
+            self.set_video_target()
+        video_in = cv2.VideoCapture(self.video_target_path)
+        width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        #fig = Figure()
         dpi = 100
-        fig, ax = plt.subplots(figsize=(640./dpi, 480./dpi), subplot_kw=dict(projection='polar'))
+        fig, ax = plt.subplots(figsize=(width./dpi, height./dpi), subplot_kw=dict(projection='polar'))
         canvas = FigureCanvas(fig)
-        # ax.set_rscale('symlog')
         ax.margins(0)
 
-        # from pathlib import Path
+        # width = int(640)
+        # height = int(480*2)
+        # fps = 60
+        # video_out = cv2.VideoWriter(os.path.join(self.video_out_path, self.video_out_name),
+        #                             cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+
+        from pathlib import Path
         # p = Path(
         #     #'D:/Github/retinal_flow_toolkit/pupil_labs_data/cb13/S001/PupilData/000/exports/000/cb13_world_nvidia2_hsv_overlay.mp4'
         #     'D:\Github\retinal_flow_toolkit\demo_input_video\dash_cam.mp4'
         #     ).as_posix()
-        source.set_video_target(initial_dir=self.video_out_path)
-        video = cv2.VideoCapture(source.video_target_path)
+        # p = Path('/Users/gjdpci/Documents/Data/Steering/cb13/S001/PupilData/000/exports/000/cb13_world_nvidia2_hsv_overlay.mp4 ')
+        # self.video_target_path = p.as_posix()
+        # video = cv2.VideoCapture('cb13_world_nvidia2_hsv_overlay.mp4')
+
+
         count = 0
         success = 1
 
-        hist_params = (4 * 4, 0, 360)
+        hist_params = (4 *2, 0, 360)
         bins = np.linspace(hist_params[1], hist_params[2], hist_params[0] + 1)
+        bin_centers = [(bins[i] + bins[i + 1]) / 2 for i in range(len(bins) - 1)]
 
         cvals = bins[:-1] / 359.0 + .5
         cvals[cvals > 1] = cvals[cvals > 1] - 1
@@ -655,17 +673,17 @@ class video_source():
         bar_colors = hsv_map(cvals)
 
         from collections import deque
-        bin_rad_hist = deque( maxlen=10)
+        bin_rad_hist = deque(maxlen=50)
 
-        f = 0  # right turn, high flow
-        #f = 17916  # lef turn, high flow
-        #f = 15725  # right turn, med flo
-
-        video.set(cv2.CAP_PROP_POS_FRAMES, f)
+        # start_frame = 16200  # right turn, high flow
+        # start_frame = 17800  # lef turn, high flow
+        # start_frame = 15725  # right turn, med flo
+        if start_frame:
+            video_in.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
         while success:
 
-            success, image = video.read()
+            success, image = video_in.read()
 
             if success:
                 plt.cla()
@@ -678,10 +696,7 @@ class video_source():
                 mag_flat = v.flatten()[v.flatten() > 10]
                 hue_flat = h.flatten()[v.flatten() > 10]
 
-                # flip the direction around
                 hue_flat = hue_flat * 2.0
-                #hue_flat = hue_flat + 180
-                #hue_flat[hue_flat > 360] = hue_flat[hue_flat > 360] - 360
 
                 bin_rad = []
                 for b_idx in range(1, len(bins)):
@@ -691,7 +706,7 @@ class video_source():
                 bin_rad = np.nan_to_num(bin_rad)
                 bin_rad_hist.appendleft(bin_rad)
 
-                ax.bar(np.deg2rad(bins[:-1]), np.mean(bin_rad_hist,axis=0), width=2 * (np.pi / (len(bins))), color=bar_colors);
+                ax.bar(np.deg2rad(bin_centers), np.mean(bin_rad_hist,axis=0), width=2 * (np.pi / (len(bins))), color=bar_colors);
 
                 canvas.draw()  # draw the canvas, cache the renderer
                 image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
@@ -1028,7 +1043,7 @@ if __name__ == "__main__":
 
     a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
     source = video_source(a_file_path)
-    source.cuda_enabled = True
+    source.cuda_enabled = False
 
     source.play_vector_histogram()
     # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=.3,
