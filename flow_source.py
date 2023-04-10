@@ -290,7 +290,7 @@ class video_source():
                                                lower_mag_threshold=lower_mag_threshold,
                                                upper_mag_threshold=upper_mag_threshold)
 
-            
+
             # Add packet to video
             video_out.write(image_out)
 
@@ -629,10 +629,7 @@ class video_source():
         height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = video_in.get(cv2.CAP_PROP_FPS)
 
-        dpi = 100
-        fig, ax = plt.subplots(figsize=(width/dpi, height/dpi), subplot_kw=dict(projection='polar'))
-        canvas = FigureCanvas(fig)
-        ax.margins(0)
+
 
         if save_video:
 
@@ -682,7 +679,10 @@ class video_source():
             success, image = video_in.read()
 
             if success:
-                plt.cla()
+                dpi = 100
+                fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), subplot_kw=dict(projection='polar'))
+                canvas = FigureCanvas(fig)
+                ax.margins(0)
                 ax.set_ylim([0, 200])
                 hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
@@ -709,6 +709,8 @@ class video_source():
                 image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
 
                 combined_image = np.vstack([image, cv2.cvtColor(image_from_plot, cv2.COLOR_RGB2BGR)])
+                plt.close('all')
+
 
                 if save_video:
                     video_out.write(combined_image)
@@ -1051,14 +1053,14 @@ if __name__ == "__main__":
     # source = video_source(a_file_path)
     source.cuda_enabled = True
 
-    source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=0.1,
-                          upper_mag_threshold=15,
-                          vector_scalar=3, save_input_images=False, save_output_images=False)
-
-
-    source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=0.1,
-                          upper_mag_threshold=15,
-                          vector_scalar=3, save_input_images=False, save_output_images=False)
+    # source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=0.1,
+    #                       upper_mag_threshold=15,
+    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
+    #
+    #
+    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=0.1,
+    #                       upper_mag_threshold=15,
+    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
 
     source.avg_flow_magnitude_by_direction(play_video=False,save_video=True)
     # source.overlay_gaze_on_video('hsv_gaze-overlay')
