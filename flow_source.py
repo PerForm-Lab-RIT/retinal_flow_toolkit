@@ -237,6 +237,7 @@ class video_source():
         count = 0
         success = 1
 
+        video_in.set(cv2.CAP_PROP_POS_FRAMES, 46272)
 
         # ##############################
         # # Iterate through frames
@@ -247,6 +248,7 @@ class video_source():
             if not success:
                 print(f'Frame {index}: video_in.read() unsuccessful')
                 continue
+
 
             if index == 0:
 
@@ -288,6 +290,7 @@ class video_source():
                                                lower_mag_threshold=lower_mag_threshold,
                                                upper_mag_threshold=upper_mag_threshold)
 
+            
             # Add packet to video
             video_out.write(image_out)
 
@@ -604,15 +607,12 @@ class video_source():
 
         if not file_path:
             if initial_dir:
-
                 Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
                 file_path = askopenfilename(title="Select the video target",initialdir=initial_dir)
             else:
                 title="Select the video target"
-
-
                 Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
-                file_path = askopenfilename(title="Select the video target")
+                file_path = askopenfilename(title="Select the video target", initialdir=self.video_out_path)
 
         self.video_target_path = file_path
         return True
@@ -664,12 +664,12 @@ class video_source():
         bar_colors = hsv_map(cvals)
 
         from collections import deque
-        bin_rad_hist = deque(maxlen=50)
+        bin_rad_hist = deque(maxlen=30)
 
         # start_frame = 16200  # right turn, high flow
-        # start_frame = 17800  # lef turn, high flow
+        #start_frame = 17800  # lef turn, high flow
         # start_frame = 15725  # right turn, med flo
-
+        # start_frame = 30000
         num_frames = int(video_in.get(cv2.CAP_PROP_FRAME_COUNT))
 
         if start_frame:
@@ -710,18 +710,24 @@ class video_source():
 
                 combined_image = np.vstack([image, cv2.cvtColor(image_from_plot, cv2.COLOR_RGB2BGR)])
 
+                if save_video:
+                    video_out.write(combined_image)
+
                 if play_video:
                     cv2.imshow(f'Image', combined_image)
                     key = cv2.waitKey(25)  # pauses for N ms before fetching next image
                     if key == 27:  # if ESC is pressed, exit loop
+
+                        if save_video:
+                            video_out.release()
+                            video_in.release()
+
                         cv2.destroyAllWindows()
-                        break
+                        return
 
-                if save_video:
-                    video_out.write(combined_image)
-
-                count = count + 1
         cv2.destroyAllWindows()
+        video_out.release()
+        video_in.release()
 
 class pupil_labs_source(video_source):
 
@@ -1045,9 +1051,14 @@ if __name__ == "__main__":
     # source = video_source(a_file_path)
     source.cuda_enabled = True
 
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=0.1,
-    #                       upper_mag_threshold=15,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
+    source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=0.1,
+                          upper_mag_threshold=15,
+                          vector_scalar=3, save_input_images=False, save_output_images=False)
+
+
+    source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=0.1,
+                          upper_mag_threshold=15,
+                          vector_scalar=3, save_input_images=False, save_output_images=False)
 
     source.avg_flow_magnitude_by_direction(play_video=False,save_video=True)
     # source.overlay_gaze_on_video('hsv_gaze-overlay')
