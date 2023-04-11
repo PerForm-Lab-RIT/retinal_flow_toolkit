@@ -653,7 +653,7 @@ class video_source():
         bins = np.linspace(hist_params[1], hist_params[2], hist_params[0] + 1)
         bin_centers = [(bins[i] + bins[i + 1]) / 2 for i in range(len(bins) - 1)]
 
-        cvals = bins[:-1] / 359.0 + .5
+        cvals = np.array(bin_centers) / 359 + 0.5
         cvals[cvals > 1] = cvals[cvals > 1] - 1
         hsv_map = cm.get_cmap('hsv').reversed()
         bar_colors = hsv_map(cvals)
