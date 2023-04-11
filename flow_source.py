@@ -237,8 +237,6 @@ class video_source():
         count = 0
         success = 1
 
-        video_in.set(cv2.CAP_PROP_POS_FRAMES, 46272)
-
         # ##############################
         # # Iterate through frames
         for index in tqdm(range(num_frames), desc="Generating " + self.video_out_name, unit='frames', total=num_frames):
