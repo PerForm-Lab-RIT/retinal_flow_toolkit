@@ -1044,11 +1044,11 @@ if __name__ == "__main__":
 
     #a_file_path = os.path.join( "videos","heading_fixed.mp4")
     #a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
-    a_file_path = os.path.join("pupil_labs_data", "cb13")
-    source = pupil_labs_source(a_file_path) #recording_number='001')
+    #a_file_path = os.path.join("pupil_labs_data", "cb13")
+    #source = pupil_labs_source(a_file_path) #recording_number='001')
 
-    # a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
-    # source = video_source(a_file_path)
+    a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
+    source = video_source(a_file_path)
     source.cuda_enabled = True
 
     # source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=0.1,
@@ -1056,11 +1056,11 @@ if __name__ == "__main__":
     #                       vector_scalar=3, save_input_images=False, save_output_images=False)
     #
     #
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=0.1,
-    #                       upper_mag_threshold=15,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
+    source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=False,
+                          upper_mag_threshold=15,
+                          vector_scalar=3, save_input_images=False, save_output_images=False)
 
-    source.avg_flow_magnitude_by_direction(play_video=False,save_video=True)
+    #source.avg_flow_magnitude_by_direction(play_video=False,save_video=True)
     # source.overlay_gaze_on_video('hsv_gaze-overlay')
 
     # a_file_path = os.path.join("pupil_labs_data", "cb1")
