@@ -1058,7 +1058,7 @@ if __name__ == "__main__":
     #
     source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=False,
                           upper_mag_threshold=15,
-                          vector_scalar=3, save_input_images=False, save_output_images=False)
+                          vector_scalar=0, save_input_images=False, save_output_images=False)
 
     #source.avg_flow_magnitude_by_direction(play_video=False,save_video=True)
     # source.overlay_gaze_on_video('hsv_gaze-overlay')
