@@ -12,6 +12,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
+import h5py
+
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename
 
@@ -565,7 +567,7 @@ class video_source():
         # create hsv output for optical flow
         hsv = np.zeros([np.shape(magnitude)[0], np.shape(magnitude)[1], 3], np.uint8)
 
-        hsv[..., 0] = angle * 180 / np.pi / 2
+        hsv[..., 0] = angle * 180 / np.pi / 2 # angle_rads -> degs 0-360 -> degs 0-180
         hsv[..., 1] = 255
         hsv[..., 2] = magnitude
         # cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
@@ -835,7 +837,7 @@ class pupil_labs_source(video_source):
 
         processed_gaze_data = pd.DataFrame({'median_x': med_x, 'median_y': med_y})
 
-        processed_gaze_data.rolling(3).apply(lambda x: np.nanmean(x)) # TODO:  Move magic number into json!
+        processed_gaze_data.rolling(3,center=True).apply(lambda x: np.nanmean(x)) # TODO:  Move magic number into json!
 
         # Save processed gaze to export folder
         proc_gaze_file_path = os.path.join(self.export_folder, 'processed_gaze.pkl')
@@ -1042,23 +1044,37 @@ class pupil_labs_source(video_source):
 
 if __name__ == "__main__":
 
-    #a_file_path = os.path.join( "videos","heading_fixed.mp4")
+    # a_file_path = os.path.join("pupil_labs_data", "cb1")
+    # source = pupil_labs_source(a_file_path)
+    # source.cuda_enabled = True
+    # source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=1,
+    #                       upper_mag_threshold=20,
+    #                       vector_scalar=3, save_input_images=False, save_output_images=True)
+
+    #a_file_path = gaze-centered_hsv "videos","heading_fixed.mp4")
     #a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
     #a_file_path = os.path.join("pupil_labs_data", "cb13")
     #source = pupil_labs_source(a_file_path) #recording_number='001')
 
-    a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
-    source = video_source(a_file_path)
+    a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
+    # r"D:\Data\Driving_1\Aware-AI\CM\"
+    source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
     source.cuda_enabled = True
+
+    source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=False,
+                          upper_mag_threshold=20,
+                          vector_scalar=0, save_input_images=False, save_output_images=False)
+
+
 
     # source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=0.1,
     #                       upper_mag_threshold=15,
     #                       vector_scalar=3, save_input_images=False, save_output_images=False)
     #
     #
-    source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=False,
-                          upper_mag_threshold=15,
-                          vector_scalar=0, save_input_images=False, save_output_images=False)
+    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=False,
+    #                       upper_mag_threshold=15,
+    #                       vector_scalar=0, save_input_images=False, save_output_images=False)
 
     #source.avg_flow_magnitude_by_direction(play_video=False,save_video=True)
     # source.overlay_gaze_on_video('hsv_gaze-overlay')
