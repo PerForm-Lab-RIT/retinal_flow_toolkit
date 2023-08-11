@@ -58,6 +58,9 @@ class video_source():
         self.video_out_name = False
         self.magnitude_out_path = os.path.join(out_parent_dir, self.source_file_name, 'magnitude_data')
 
+        self.hdf5_out = None
+        self.flow_hdf5_dataset = None
+
         self.video_target_path = False
         self.cumulative_mag_hist = None
         self.magnitude_bins = None
@@ -190,6 +193,17 @@ class video_source():
 
         return stream
 
+    # def create_hdf5_object(self,algorithm,frame_shape,num_frames):
+    #
+    #     hdf5_out_name = self.source_file_name + '_' + algorithm + '_flow.hdf5'
+    #     self.hdf5_out = h5py.File(hdf5_out_name, 'w')
+    #
+    #     flow_dataset  = self.hdf5_out.create_dataset("flow", (num_frames, frame_shape[0], frame_shape[1], 3),
+    #                                     maxshape=(None, frame_shape[0], frame_shape[1], 3), dtype='float32',
+    #                                     compression="gzip", compression_opts=9)
+    #
+    #     return flow_dataset
+
     def create_video_objects(self,algorithm, visualize_as, input_video_path=False):
 
         if input_video_path == False:
@@ -239,84 +253,93 @@ class video_source():
         count = 0
         success = 1
 
-        # ##############################
-        # # Iterate through frames
-        for index in tqdm(range(num_frames), desc="Generating " + self.video_out_name, unit='frames', total=num_frames):
+        hdf5_out_name = self.source_file_name + '_' + algorithm + '_flow.hdf5'
+        # self.hdf5_out = h5py.File(hdf5_out_name, 'w')
+        # self.flow_hdf5_dataset = self.create_hdf5_object(algorithm, [width, height], num_frames)
 
-            success, frame = video_in.read()
+        with h5py.File(hdf5_out_name, 'w') as hdf5_file_out:
 
-            if not success:
-                print(f'Frame {index}: video_in.read() unsuccessful')
-                continue
+            self.flow_hdf5_dataset = hdf5_file_out.create_dataset("flow", (1, height, width, 2),
+                                                        maxshape=(None, height, width, 2), dtype='float32',chunks=True,
+                                                        compression="gzip")#, compression_opts=9
 
+            # ##############################
+            # # Iterate through frames
+            for index in tqdm(range(num_frames), desc="Generating " + self.video_out_name, unit='frames', total=num_frames):
 
-            if index == 0:
+                success, frame = video_in.read()
 
-                prev_frame = frame
-                prev_frame = self.preprocess_frame(prev_frame)
+                if not success:
+                    print(f'Frame {index}: video_in.read() unsuccessful')
+                    continue
 
-                # Apply histogram normalization.
-                if algo_supports_cuda and self.cuda_enabled:
-                    self.previous_gpu.upload(prev_frame)
-                    self.previous_gpu = cv2.cuda.cvtColor(self.previous_gpu, cv2.COLOR_BGR2GRAY)
-                    # self.previous_gpu = self.clahe.apply(previous_gpu, cv2.cuda_Stream.Null())
+                if index == 0:
+
+                    prev_frame = frame
+                    prev_frame = self.preprocess_frame(prev_frame)
+
+                    # Apply histogram normalization.
+                    if algo_supports_cuda and self.cuda_enabled:
+                        self.previous_gpu.upload(prev_frame)
+                        self.previous_gpu = cv2.cuda.cvtColor(self.previous_gpu, cv2.COLOR_BGR2GRAY)
+                        # self.previous_gpu = self.clahe.apply(previous_gpu, cv2.cuda_Stream.Null())
+                    else:
+                        self.previous_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                        # image2_gray = self.clahe.apply(image2_gray)
+
+                    # Save input images?
+                    if save_input_images:
+                        if os.path.isdir(self.raw_frames_out_path) is False:
+                            os.makedirs(self.raw_frames_out_path)
+                        frame.save(os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
+
+                    # Write out a blank first frame
+                    image_out = np.zeros([np.shape(frame)[0], np.shape(frame)[1], 3], dtype=np.uint8)
+                    video_out.write(image_out)
+                    continue
                 else:
-                    self.previous_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-                    # image2_gray = self.clahe.apply(image2_gray)
+                    current_bgr_processed = self.preprocess_frame(frame)
+
+                if algo_supports_cuda and self.cuda_enabled:
+                    self.current_gpu.upload(current_bgr_processed)
+                    self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
+                else:
+                    self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
+
+                image_out = self.add_visualization(index,
+                                                   current_bgr_processed,
+                                                   visualize_as,
+                                                   algo_supports_cuda=algo_supports_cuda,
+                                                   lower_mag_threshold=lower_mag_threshold,
+                                                   upper_mag_threshold=upper_mag_threshold)
+
+                # Add packet to video
+                video_out.write(image_out)
+
+                if self.cuda_enabled:
+                    self.previous_gpu = self.current_gpu.clone()
+
+                self.previous_gray = self.current_gray
 
                 # Save input images?
                 if save_input_images:
                     if os.path.isdir(self.raw_frames_out_path) is False:
                         os.makedirs(self.raw_frames_out_path)
-                    frame.save(os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
+                    cv2.imwrite(str(os.path.join(self.raw_frames_out_path, 'frame-{}.png'.format(index))),
+                                current_bgr_processed)
 
-                # Write out a blank first frame
-                image_out = np.zeros([np.shape(frame)[0], np.shape(frame)[1], 3], dtype=np.uint8)
-                video_out.write(image_out)
-                continue
-            else:
-                current_bgr_processed = self.preprocess_frame(frame)
+                # Save output images?
+                if save_output_images:
+                    if os.path.isdir(self.flow_frames_out_path) is False:
+                        os.makedirs(self.flow_frames_out_path)
+                    cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(index))),
+                                image_out)
 
-            if algo_supports_cuda and self.cuda_enabled:
-                self.current_gpu.upload(current_bgr_processed)
-                self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
-            else:
-                self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
+            video_out.release()
+            video_in.release()
+            self.hdf5_out.close()
 
-            image_out = self.add_visualization(index,
-                                               current_bgr_processed,
-                                               visualize_as,
-                                               algo_supports_cuda=algo_supports_cuda,
-                                               lower_mag_threshold=lower_mag_threshold,
-                                               upper_mag_threshold=upper_mag_threshold)
-
-
-            # Add packet to video
-            video_out.write(image_out)
-
-            if self.cuda_enabled:
-                self.previous_gpu = self.current_gpu.clone()
-
-            self.previous_gray = self.current_gray
-
-            # Save input images?
-            if save_input_images:
-                if os.path.isdir(self.raw_frames_out_path) is False:
-                    os.makedirs(self.raw_frames_out_path)
-                cv2.imwrite(str(os.path.join(self.raw_frames_out_path, 'frame-{}.png'.format(index))),
-                            current_bgr_processed)
-
-            # Save output images?
-            if save_output_images:
-                if os.path.isdir(self.flow_frames_out_path) is False:
-                    os.makedirs(self.flow_frames_out_path)
-                cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(index))),
-                            image_out)
-
-        video_out.release()
-        video_in.release()
-
-        self.save_out_mag_histogram(algorithm, visualize_as)
+            self.save_out_mag_histogram(algorithm, visualize_as)
 
     def calculate_flow_for_frame(self, index, algo_supports_cuda, lower_mag_threshold=False, upper_mag_threshold=False):
 
@@ -482,6 +505,7 @@ class video_source():
         frame = remove_noise_bgr_dark_patches(frame)
         return frame
 
+
     def add_visualization(self,
                           index,
                           current_bgr,
@@ -495,6 +519,10 @@ class video_source():
                                                                algo_supports_cuda,
                                                                lower_mag_threshold=lower_mag_threshold,
                                                                upper_mag_threshold=upper_mag_threshold)
+
+        # Save optical flow to HDF5
+        self.flow_hdf5_dataset.resize((self.flow_hdf5_dataset.shape[0] + 1, flow.shape[0], flow.shape[1], 2))
+        self.flow_hdf5_dataset[index] = flow
 
         if visualize_as == "streamlines":
 

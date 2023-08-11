@@ -14,6 +14,8 @@ import subprocess
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
+import h5py
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 try:
@@ -187,8 +189,6 @@ for i in tqdm(range(1, num_frames), desc="Generating " + vid_out_full_path, unit
         magnitude[magnitude > upper_mag_threshold] = upper_mag_threshold
 
     magnitude = ((magnitude-lower_mag_threshold) / (upper_mag_threshold-lower_mag_threshold)) * 255.0
-
-
 
     # 56.205658
     # 43.350235
