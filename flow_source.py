@@ -52,14 +52,10 @@ class video_source():
 
         self.out_parent_dir = out_parent_dir
         self.raw_frames_out_path = os.path.join(out_parent_dir, self.source_file_name, 'raw')
-        self.mid_frames_out_path = os.path.join(out_parent_dir, self.source_file_name, 'mid_images')
         self.flow_frames_out_path = os.path.join(out_parent_dir, self.source_file_name, 'flow')
-        self.video_out_path = os.path.join(out_parent_dir, self.source_file_name)
-        self.video_out_name = False
-        self.magnitude_out_path = os.path.join(out_parent_dir, self.source_file_name, 'magnitude_data')
+        self.video_out_path = os.path.abspath(os.path.join(out_parent_dir, self.source_file_name))
 
-        self.hdf5_out = None
-        self.flow_hdf5_dataset = None
+        self.magnitude_out_path = os.path.join(out_parent_dir, self.source_file_name, 'magnitude_data')
 
         self.video_target_path = False
         self.cumulative_mag_hist = None
@@ -193,52 +189,39 @@ class video_source():
 
         return stream
 
-    # def create_hdf5_object(self,algorithm,frame_shape,num_frames):
-    #
-    #     hdf5_out_name = self.source_file_name + '_' + algorithm + '_flow.hdf5'
-    #     self.hdf5_out = h5py.File(hdf5_out_name, 'w')
-    #
-    #     flow_dataset  = self.hdf5_out.create_dataset("flow", (num_frames, frame_shape[0], frame_shape[1], 3),
-    #                                     maxshape=(None, frame_shape[0], frame_shape[1], 3), dtype='float32',
-    #                                     compression="gzip", compression_opts=9)
-    #
-    #     return flow_dataset
+    def get_hdf5_filepath(self, algorithm: str, gaze_centered=False):
 
-    def create_video_objects(self,algorithm, visualize_as, input_video_path=False):
-
-        if input_video_path == False:
-                input_video_path = self.file_path # world.mp4
-
-        if visualize_as == 'gaze_overlay':
-            path, input_video_filename = os.path.split(input_video_path)
-            input_video_filename = input_video_filename.split('.')[0]
-            self.video_out_name = f'{input_video_filename}_gaze_overlay.mp4'
+        if gaze_centered:
+            hdf5_out_name = self.source_file_name + '_' + algorithm + '_gaze-centered_flow.hdf5'
         else:
-            self.video_out_name = self.source_file_name + '_' + algorithm + '_' + visualize_as + '.mp4'
+            hdf5_out_name = self.source_file_name + '_' + algorithm + '_flow.hdf5'
 
-        video_in = cv2.VideoCapture(input_video_path)
+        return os.path.join(self.video_out_path,hdf5_out_name)
+
+    def open_hdf5_file(self, algorithm: str, gaze_centered):
+
+        if not os.path.exists(self.get_hdf5_filepath(algorithm, gaze_centered)):
+            logger.error('HDF5 flow file not found.  Try calculating optic flow with that algorithm first.', stack_info=True, exc_info=True)
+
+            sys.exit(1)
+
+        hdf5_flow = h5py.File(self.get_hdf5_filepath(algorithm, gaze_centered), 'r')
+        return hdf5_flow
+
+    def calculate_flow(self,
+                       video_out_name=False,
+                       algorithm="nvidia2",
+                       gaze_centered=False,
+                       preprocess_frames = False,
+                       save_input_images=False,
+                       save_output_images=False):
+
+
+        video_in = cv2.VideoCapture(self.file_path)
 
         width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = video_in.get(cv2.CAP_PROP_FPS)
-
-        video_out = cv2.VideoWriter(os.path.join(self.video_out_path, self.video_out_name),cv2.VideoWriter_fourcc(*'mp4v'), fps, (width,height))
-
-        return video_in, video_out
-
-
-    def calculate_flow(self, video_out_name=False, algorithm="nvidia2", visualize_as="hsv_stacked",
-                       vector_scalar=1,
-                       lower_mag_threshold=False,
-                       upper_mag_threshold=False,
-                       save_input_images=False,
-                       save_midpoint_images=False,
-                       save_output_images=False):
-
-        self.save_midpoint_images = save_midpoint_images
-
-        # create video containers and streams
-        video_in, video_out = self.create_video_objects(algorithm, visualize_as)
         num_frames = int(video_in.get(cv2.CAP_PROP_FRAME_COUNT))
 
         width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -253,19 +236,27 @@ class video_source():
         count = 0
         success = 1
 
-        hdf5_out_name = self.source_file_name + '_' + algorithm + '_flow.hdf5'
-        # self.hdf5_out = h5py.File(hdf5_out_name, 'w')
-        # self.flow_hdf5_dataset = self.create_hdf5_object(algorithm, [width, height], num_frames)
+        hdf5_filepath = self.get_hdf5_filepath(algorithm,gaze_centered=gaze_centered)
 
-        with h5py.File(hdf5_out_name, 'w') as hdf5_file_out:
+        with h5py.File(hdf5_filepath, 'w') as hdf5_file_out:
 
-            self.flow_hdf5_dataset = hdf5_file_out.create_dataset("flow", (1, height, width, 2),
+            # hdf5_filepath['fps'] = fps
+            # hdf5_filepath['num_frames'] = num_frames
+            # hdf5_filepath['video_in'] = num_frames
+
+            flow_hdf5_dataset = hdf5_file_out.create_dataset("flow", (1, height, width, 2),
                                                         maxshape=(None, height, width, 2), dtype='float32',chunks=True,
-                                                        compression="gzip")#, compression_opts=9
+                                                        compression="lzf")#, compression_opts=9
+
+            flow_hdf5_dataset.attrs['approx_fps'] = fps
+            flow_hdf5_dataset.attrs['num_source_frames'] = num_frames
+            h = int(video_in.get(cv2.CAP_PROP_FOURCC))
+            flow_hdf5_dataset.attrs['source_fourcc'] = h
+            flow_hdf5_dataset.attrs['source_codec'] = chr(h&0xff) + chr((h>>8)&0xff) + chr((h>>16)&0xff) + chr((h>>24)&0xff)
 
             # ##############################
             # # Iterate through frames
-            for index in tqdm(range(num_frames), desc="Generating " + self.video_out_name, unit='frames', total=num_frames):
+            for index in tqdm(range(num_frames), desc="Saving flow to  " + hdf5_filepath, unit='frames', total=num_frames):
 
                 success, frame = video_in.read()
 
@@ -276,7 +267,9 @@ class video_source():
                 if index == 0:
 
                     prev_frame = frame
-                    prev_frame = self.preprocess_frame(prev_frame)
+
+                    if preprocess_frames:
+                        prev_frame = self.preprocess_frame(prev_frame)
 
                     # Apply histogram normalization.
                     if algo_supports_cuda and self.cuda_enabled:
@@ -287,17 +280,16 @@ class video_source():
                         self.previous_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
                         # image2_gray = self.clahe.apply(image2_gray)
 
-                    # Save input images?
-                    if save_input_images:
-                        if os.path.isdir(self.raw_frames_out_path) is False:
-                            os.makedirs(self.raw_frames_out_path)
-                        frame.save(os.path.join(self.raw_frames_out_path, '{:06d}.png'.format(raw_frame.index)))
-
                     # Write out a blank first frame
                     image_out = np.zeros([np.shape(frame)[0], np.shape(frame)[1], 3], dtype=np.uint8)
-                    video_out.write(image_out)
+                    # video_out.write(image_out)
                     continue
                 else:
+
+                    # If is gaze data, recenter
+                    if gaze_centered:
+                        self.recenter_frame_on_gaze(frame, index)
+
                     current_bgr_processed = self.preprocess_frame(frame)
 
                 if algo_supports_cuda and self.cuda_enabled:
@@ -306,15 +298,14 @@ class video_source():
                 else:
                     self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
 
-                image_out = self.add_visualization(index,
-                                                   current_bgr_processed,
-                                                   visualize_as,
-                                                   algo_supports_cuda=algo_supports_cuda,
-                                                   lower_mag_threshold=lower_mag_threshold,
-                                                   upper_mag_threshold=upper_mag_threshold)
 
-                # Add packet to video
-                video_out.write(image_out)
+
+                flow = self.calculate_flow_for_frame(index,algo_supports_cuda)
+
+                # Save optical flow to HDF5
+                flow_hdf5_dataset.resize((flow_hdf5_dataset.shape[0] + 1, flow.shape[0], flow.shape[1], 2))
+                flow_hdf5_dataset[index] = flow
+
 
                 if self.cuda_enabled:
                     self.previous_gpu = self.current_gpu.clone()
@@ -335,13 +326,9 @@ class video_source():
                     cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(index))),
                                 image_out)
 
-            video_out.release()
             video_in.release()
-            self.hdf5_out.close()
 
-            self.save_out_mag_histogram(algorithm, visualize_as)
-
-    def calculate_flow_for_frame(self, index, algo_supports_cuda, lower_mag_threshold=False, upper_mag_threshold=False):
+    def calculate_flow_for_frame(self, index, algo_supports_cuda):
 
         if self.cuda_enabled and algo_supports_cuda:
 
@@ -365,53 +352,35 @@ class video_source():
             flow = self.flow_algo.calc(self.current_gray, self.previous_gray, None)
             flow = flow[0]
 
-        magnitude, angle = self.flow_to_mag_angle(index,
-                                                  flow,
-                                                  lower_mag_threshold=lower_mag_threshold,
-                                                  upper_mag_threshold=upper_mag_threshold)
-
-        return flow, magnitude, angle
+        return flow
 
 
+    # def flow_to_mag_angle(self, index, flow, lower_mag_threshold=False, upper_mag_threshold=False):
+    #
+    #     # Convert flow to mag / angle
+    #         magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    #         magnitude = self.filter_magnitude(magnitude)  # 29.6,
+    #         self.append_to_mag_histogram(index, magnitude)  # 7.3
+    #
+    #         magnitude = self.filter_magnitude(magnitude)  # 29.6,
+    #         magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude,
+    #                                                                 lower_mag_threshold=lower_mag_threshold,
+    #                                                                 upper_mag_threshold=upper_mag_threshold)
+    #
+    #         return magnitude, angle
 
-    def flow_to_mag_angle(self, index, flow, lower_mag_threshold=False, upper_mag_threshold=False):
-
-        # Convert flow to mag / angle
-            magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-            magnitude = self.filter_magnitude(magnitude)  # 29.6,
-            self.append_to_mag_histogram(index, magnitude)  # 7.3
-            magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude,
-                                                                    lower_mag_threshold=lower_mag_threshold,
-                                                                    upper_mag_threshold=upper_mag_threshold)
-
-            return magnitude, angle
-
-    def append_to_mag_histogram(self, index, magnitude):
-
-        mag_hist = np.histogram(magnitude, self.hist_params[0], (self.hist_params[1], self.hist_params[2]))
-
-        # Store the histogram of avg magnitudes
-        if index == 1:
-            # Store the first flow histogram
-            self.cumulative_mag_hist = mag_hist[0]
-            self.magnitude_bins = mag_hist[1]
-        else:
-            # Calc cumulative avg flow magnitude by adding the first flow histogram in a weighted manner
-            cumulative_mag_hist = np.divide(
-                np.sum([np.multiply((index - 1), self.cumulative_mag_hist), mag_hist[0]], axis=0), index)
-
-    def save_out_mag_histogram(self, algorithm,  visualize_as):
+    def save_out_mag_histogram(self, algorithm):
 
         #  Save out magnitude data pickle and image
         if os.path.isdir(self.magnitude_out_path) is False:
             os.makedirs(self.magnitude_out_path)
 
-        mag_pickle_filename = self.source_file_name + '_' + algorithm + '_' + visualize_as + '_mag.pickle'
+        mag_pickle_filename = self.source_file_name + '_' + algorithm + '_mag.pickle'
         dbfile = open(os.path.join(self.magnitude_out_path, mag_pickle_filename), 'wb')
         pickle.dump({"values": self.cumulative_mag_hist, "bins": self.magnitude_bins[1]}, dbfile)
         dbfile.close()
 
-        mag_image_filename = self.source_file_name + '_' + algorithm + '_' + visualize_as + '_mag.jpg'
+        mag_image_filename = self.source_file_name + '_' + algorithm + '_mag.jpg'
         mag_image_fileloc = os.path.join(self.magnitude_out_path, mag_image_filename)
         # self.generate_mag_histogram(mag_image_fileloc, cumulative_mag_hist, mag_hist[1])
 
@@ -436,20 +405,50 @@ class video_source():
 
         plt.savefig(mag_image_fileloc)
 
-    def filter_magnitude(self, magnitude):
+    def calculate_magnitude_distribution(self,algorithm, gaze_centered, stride_length = 20):
+        # Calculates magnitude distribution of flow vectors for every stride_length frame in central 2/3 of video
 
-        if self.cuda_enabled:
-            _, mask = cv2.cuda.threshold(self.current_gpu, 50, 255, cv2.THRESH_TOZERO)
-            magnitude = cv2.cuda.bitwise_and(magnitude, magnitude, mask=mask.download())
-        else:
-            _, mask = cv2.threshold(self.current_gray, 50, 255, cv2.THRESH_TOZERO)
-            magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
+        def append_to_mag_histogram(index, magnitude):
+
+            mag_hist = np.histogram(magnitude, self.hist_params[0], (self.hist_params[1], self.hist_params[2]))
+
+            # Store the histogram of avg magnitudes
+            if index == 0:
+                # Store the first flow histogram
+                self.cumulative_mag_hist = mag_hist[0]
+                self.magnitude_bins = mag_hist[1]
+            else:
+                # Calc cumulative avg flow magnitude by adding the first flow histogram in a weighted manner
+                cumulative_mag_hist = np.divide(
+                    np.sum([np.multiply((index - 1), self.cumulative_mag_hist), mag_hist[0]], axis=0), index)
+
+        print('Calculating magnitude distribution.')
+
+        hdf5_object = self.open_hdf5_file(algorithm,gaze_centered)
+        flow = hdf5_object['flow']
+
+        num_rows = np.shape(flow)[0]
+        one_third = int(num_rows/3)
+
+        row_indices = np.arange(one_third,num_rows-one_third, stride_length)
+        count = 0
+        for frame_idx in tqdm(row_indices, desc="Calculating magnitude distribution.", unit='frames', total=len(row_indices)):
+        # for count, frame_idx in enumerate(np.arange(one_third,num_rows-one_third, stride_length)):
+
+            magnitude, angle = cv2.cartToPolar(flow[frame_idx,:,:,0], flow[frame_idx,:,:,1])
+            append_to_mag_histogram(count, magnitude)
+            count = count+1
+
+        self.save_out_mag_histogram(algorithm)
+
+    def filter_magnitude(self, magnitude, bgr_frame):
+
+        _, mask = cv2.threshold(cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY), 50, 255, cv2.THRESH_TOZERO)
+        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
 
         return magnitude
 
     def apply_magnitude_thresholds_and_rescale(self, magnitude, lower_mag_threshold=False, upper_mag_threshold=False):
-
-        #magnitude = np.clip(magnitude, lower_mag_threshold, upper_mag_threshold)
 
         if lower_mag_threshold:
             magnitude[magnitude < lower_mag_threshold] = 0
@@ -457,7 +456,6 @@ class video_source():
         if upper_mag_threshold:
             magnitude[magnitude > upper_mag_threshold] = upper_mag_threshold
 
-        # magnitude = ((magnitude - lower_mag_threshold) / (upper_mag_threshold - lower_mag_threshold)) * 255.0
         magnitude = (magnitude / upper_mag_threshold) * 255.0
 
         return magnitude
@@ -475,7 +473,6 @@ class video_source():
             return mask
 
         def create_road_mask_on_hsv(hsv_in):
-
             lower = np.array([0, 240, 200])
             upper = np.array([40, 255, 255])
             mask1 = cv2.inRange(hsv, lower, upper)
@@ -505,24 +502,109 @@ class video_source():
         frame = remove_noise_bgr_dark_patches(frame)
         return frame
 
+    def create_video_objects(self,algorithm, visualize_as, gaze_centered, video_out_filename):
 
-    def add_visualization(self,
-                          index,
-                          current_bgr,
-                          visualize_as,
-                          algo_supports_cuda,
-                          upper_mag_threshold=False,
-                          lower_mag_threshold=False,
-                          vector_scalar=1):
+        video_in = cv2.VideoCapture(self.file_path)
 
-        flow, magnitude, angle = self.calculate_flow_for_frame(index,
-                                                               algo_supports_cuda,
-                                                               lower_mag_threshold=lower_mag_threshold,
-                                                               upper_mag_threshold=upper_mag_threshold)
+        width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
 
-        # Save optical flow to HDF5
-        self.flow_hdf5_dataset.resize((self.flow_hdf5_dataset.shape[0] + 1, flow.shape[0], flow.shape[1], 2))
-        self.flow_hdf5_dataset[index] = flow
+        # If a stacked video viz (e.g., hsv_stacked), double the height
+        if 'stacked' in visualize_as:
+            height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT)) * 2
+        else:
+            height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        fps = video_in.get(cv2.CAP_PROP_FPS)
+        video_out = cv2.VideoWriter(os.path.join(self.video_out_path, video_out_filename),cv2.VideoWriter_fourcc(*'mp4v'), fps, (width,height))
+
+        return video_in, video_out
+
+    def create_visualization(self,
+                             algorithm: str,
+                             gaze_centered: False,
+                             visualize_as: str,
+                             lower_mag_threshold = False,
+                             upper_mag_threshold = False,
+                             ):
+
+        # Create video out filename
+        video_out_filename = []
+
+        lower_thresh_string = 'None' if not lower_mag_threshold else str(lower_mag_threshold)
+        upper_thresh_string = 'None' if not upper_mag_threshold else str(upper_mag_threshold)
+        thresh_string = f'{lower_thresh_string}-{upper_thresh_string}'
+
+        if gaze_centered:
+            path, input_video_filename = os.path.split(self.file_path)
+            input_video_filename = input_video_filename.split('.')[0]
+            video_out_filename = f'{input_video_filename}_gaze_centered_{algorithm}_{thresh_string}.mp4'
+        else:
+            video_out_filename = f'{self.source_file_name}_{algorithm}_{thresh_string}.mp4'
+
+        # create video containers and streams
+        video_in, video_out = self.create_video_objects(algorithm, visualize_as, gaze_centered, video_out_filename)
+
+        hdf5_object = self.open_hdf5_file(algorithm, gaze_centered)
+        flow_ds = hdf5_object['flow']
+        attrs = flow_ds.attrs
+
+        width = np.shape(flow_ds[2])
+        height = np.shape(flow_ds[1])
+        fps = attrs['approx_fps']
+        num_frames = int(video_in.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        assert np.shape(flow_ds)[0] == attrs['num_source_frames'],"The number of frames from the source does not equal the number of frames in the hdf5 flow file."
+
+        for index in tqdm(range(num_frames), desc="Generating " + video_out_filename, unit='frames', total=num_frames):
+
+            success, frame = video_in.read()
+
+            if not success:
+                print(f'Frame {index}: video_in.read() unsuccessful')
+                continue
+
+            if gaze_centered:
+                frame = self.recenter_frame_on_gaze(frame, index)
+
+            flow_frame = np.array(flow_ds[index,...])
+            magnitude, angle = cv2.cartToPolar(flow_frame[...,0],flow_frame[...,1])
+
+            # Rescales from lower thresh - upper thresh and into range 0-255
+            magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude,
+                                                                    lower_mag_threshold=lower_mag_threshold,
+                                                                    upper_mag_threshold=upper_mag_threshold)
+
+
+            # A custom filter.  Mine masks out black patches in the input video.
+            # Due to compression, they can be filled with noise.
+            magnitude = self.filter_magnitude(magnitude, frame)
+
+            # flow_frame = cv2.polarToCart(magnitude,angle)
+
+            magnitude = np.array(magnitude, dtype=np.uint8)
+            # angle = np.array(angle, dtype=np.uint8)
+
+            image_out = self.visualize_frame(index,
+                                             frame,
+                                             flow_frame,
+                                             magnitude,
+                                             angle,
+                                             visualize_as)
+
+            # Add packet to video
+            video_out.write(image_out)
+
+        video_out.release()
+        video_in.release()
+
+
+    def visualize_frame(self,
+                        index,
+                        current_bgr,
+                        flow,
+                        magnitude,
+                        angle,
+                        visualize_as):
 
         if visualize_as == "streamlines":
 
@@ -548,14 +630,11 @@ class video_source():
 
         else:
             logger.error('Visualization method not implemented, or a typo', stack_info=True, exc_info=True)
+            sys.exit(1)
 
         return image_out
 
     def visualize_flow_as_streamlines(self, frame, flow):
-
-        # dbfile = open(os.path.join(self.video_out_path,"streamlines.pickle"), 'wb')
-        # pickle.dump({"frame": frame, "flow": flow},dbfile)
-        # dbfile.close()
 
         x = np.arange(0, np.shape(frame)[0], 1)
         y = np.arange(0, np.shape(frame)[1], 1)
@@ -568,7 +647,7 @@ class video_source():
 
         fig, ax = plt.subplots(figsize=(6.4, 4.8), dpi=100)
 
-        plt.streamplot(grid_x, grid_y, -flow[..., 0], -flow[..., 1],
+        plt.streamplot(grid_x, grid_y, -flow[...,0], -flow[...,1],
                        start_points=start_pts,
                        color='w',
                        maxlength=.4,
@@ -605,7 +684,7 @@ class video_source():
 
         return bgr
 
-    def visualize_flow_as_vectors(self, frame, magnitude, angle, divisor=15, vector_scalar=1):
+    def visualize_flow_as_vectors(self, frame, magnitude, angle, divisor=15):
 
         '''Display image with a visualisation of a flow over the top.
         A divisor controls the density of the quiver plot.'''
@@ -613,8 +692,8 @@ class video_source():
         # create a blank mask, on which lines will be drawn.
         mask = np.zeros([np.shape(magnitude)[0], np.shape(magnitude)[1], 3], np.uint8)
 
-        if vector_scalar != 1 & vector_scalar != False:
-            magnitude = np.multiply(magnitude, vector_scalar)
+        # if vector_scalar != 1 & vector_scalar != False:
+        #     magnitude = np.multiply(magnitude, vector_scalar)
 
         vector_x, vector_y = cv2.polarToCart(magnitude, angle)
 
@@ -657,8 +736,6 @@ class video_source():
         height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = video_in.get(cv2.CAP_PROP_FPS)
 
-
-
         if save_video:
 
             path, input_video_filename = os.path.split(self.video_target_path)
@@ -666,6 +743,8 @@ class video_source():
             video_out_name = f'{input_video_filename}_avg-mag-by-direction.mp4'
             video_out = cv2.VideoWriter(os.path.join(self.export_folder, video_out_name),
                                         cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, 2*height))
+
+
 
         # from pathlib import Path
         # p = Path(
@@ -759,6 +838,11 @@ class video_source():
         video_out.release()
         video_in.release()
 
+    def recenter_frame_on_gaze(self, frame, frame_index):
+        logger.error('Gaze centering is only possible with pupil labs data sources',
+                     stack_info=True, exc_info=True)
+        sys.exit(1)
+
 class pupil_labs_source(video_source):
 
     def __init__(self, pupil_labs_parent_folder,
@@ -803,29 +887,24 @@ class pupil_labs_source(video_source):
         self.player_info = json.load(f)
         f.close()
 
-    def calculate_flow(self, video_out_name=False,
+    def calculate_flow(self,
+                       video_out_name=False,
                        algorithm="nvidia2",
-                       visualize_as="hsv_stacked",
-                       vector_scalar=1,
-                       lower_mag_threshold=False,
-                       upper_mag_threshold=False,
+                       preprocess_frames=False,
+                       gaze_centered=False,
                        save_input_images=False,
-                       save_midpoint_images=False,
                        save_output_images=False):
 
-        if "gaze" in visualize_as and not self.gaze_data:
+        if gaze_centered:
             self.import_gaze_from_exports()
             self.process_gaze_data()
 
-        super().calculate_flow(video_out_name=video_out_name,
-                               algorithm=algorithm,
-                               visualize_as=visualize_as,
-                               vector_scalar=vector_scalar,
-                               lower_mag_threshold=lower_mag_threshold,
-                               upper_mag_threshold=upper_mag_threshold,
-                               save_input_images=save_input_images,
-                               save_midpoint_images=save_midpoint_images,
-                               save_output_images=save_output_images)
+            super().calculate_flow(video_out_name=video_out_name,
+                                   algorithm=algorithm,
+                                   preprocess_frames=preprocess_frames,
+                                   gaze_centered=gaze_centered,
+                                   save_input_images=save_input_images,
+                                   save_output_images=save_output_images)
 
     def modify_frame(self, frame, frame_index):
 
@@ -963,8 +1042,7 @@ class pupil_labs_source(video_source):
 
         else:
             if self.export_number is False:
-                export_folder_list = []
-                [export_folder_list.append(name) for name in os.listdir(exports_parent_folder) if name[0] != '.']
+                export_folder_list = [x.name for x in os.scandir(exports_parent_folder)]
                 self.export_number = export_folder_list[-1]
 
             export_folder_path = os.path.join(exports_parent_folder, self.export_number)
@@ -1001,144 +1079,64 @@ class pupil_labs_source(video_source):
 
         return recording_folder
 
-    def add_visualization(self,
-                          index,
-                          current_bgr,
-                          visualize_as,
-                          algo_supports_cuda,
-                          upper_mag_threshold=False,
-                          lower_mag_threshold=False,
-                          vector_scalar=1):
-
-        if visualize_as in ['hsv_stacked']:
-            logger.exception('This visualization method is not available for pupil labs data folders')
-
-        if 'gaze-centered' in visualize_as:
-            current_bgr = self.recenter_frame_on_gaze(current_bgr, index)
-
-            if visualize_as == 'gaze-centered_hsv':
-                visualize_as = 'hsv_overlay'
-            elif visualize_as == 'gaze-centered_vectors':
-                visualize_as = 'hsv_overlay'
-            elif visualize_as == 'gaze-centered_streamlines':
-                visualize_as = 'streamlines'
-
-            if algo_supports_cuda and self.cuda_enabled:
-                self.current_gpu.upload(current_bgr)
-                self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
-            else:
-                self.current_gray = cv2.cvtColor(current_bgr, cv2.COLOR_BGR2GRAY)
-        else:
-            self.overlay_gaze_on_frame(current_bgr,index)
-
-        image_out = super().add_visualization(index,
-                                              current_bgr,
-                                              visualize_as,
-                                              algo_supports_cuda,
-                                              upper_mag_threshold=upper_mag_threshold,
-                                              lower_mag_threshold=lower_mag_threshold,
-                                              vector_scalar=vector_scalar)
-
-        return image_out
-
-
-    def overlay_gaze_on_video(self, input_video=False, file_name_out='gaze_overlay.mp4'):
-
-        Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
-        input_video_fullpath = askopenfilename(title="Select the video on which to overlay gaze",
-                                               initialdir=self.recording_folder)
-
-        input_video_path, input_video_filename = os.path.split(input_video_fullpath)
-        input_video_filename = input_video_filename.split('.')[0]
-        file_name_out = f'{input_video_filename}_gaze_overlay.mp4'
-
-        video_in, video_out = self.create_video_objects(algorithm=False, visualize_as='gaze_overlay')
-        num_frames = int(video_in.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        algo_supports_cuda = self.init_flow(False, (height, width))
-
-        for index in tqdm(range(num_frames), desc="Generating " + self.video_out_name, unit='frames', total=num_frames):
-
-            success, current_bgr = video_in.read()
-            overlay_frame = self.overlay_gaze_on_frame(current_bgr, index)
-            video_out.write(overlay_frame)
-
-        self.encode_frame(container_out, stream_out, current_bgr_processed, raw_frame, stream_in, flush=True)
-
-        video_out.release()
-        video_in.release()
+    # def overlay_gaze_on_video(self, input_video=False, file_name_out='gaze_overlay.mp4'):
+    #
+    #     Tk().withdraw()  # we don't want a full GUI, so keep the root window from appearing
+    #     input_video_fullpath = askopenfilename(title="Select the video on which to overlay gaze",
+    #                                            initialdir=self.recording_folder)
+    #
+    #     input_video_path, input_video_filename = os.path.split(input_video_fullpath)
+    #     input_video_filename = input_video_filename.split('.')[0]
+    #     file_name_out = f'{input_video_filename}_gaze_overlay.mp4'
+    #
+    #     video_in, video_out = self.create_video_objects(algorithm=False, visualize_as='gaze_overlay')
+    #     num_frames = int(video_in.get(cv2.CAP_PROP_FRAME_COUNT))
+    #
+    #     width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
+    #     height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    #     algo_supports_cuda = self.init_flow(False, (height, width))
+    #
+    #     for index in tqdm(range(num_frames), desc="Generating " + self.video_out_name, unit='frames', total=num_frames):
+    #
+    #         success, current_bgr = video_in.read()
+    #         overlay_frame = self.overlay_gaze_on_frame(current_bgr, index)
+    #         video_out.write(overlay_frame)
+    #
+    #     self.encode_frame(container_out, stream_out, current_bgr_processed, raw_frame, stream_in, flush=True)
+    #
+    #     video_out.release()
+    #     video_in.release()
 
 if __name__ == "__main__":
 
-    # a_file_path = os.path.join("pupil_labs_data", "cb1")
-    # source = pupil_labs_source(a_file_path)
-    # source.cuda_enabled = True
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=1,
-    #                       upper_mag_threshold=20,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=True)
+    # a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
+    # source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
+    #
+    # source.calculate_flow(algorithm='nvidia2',
+    #                       preprocess_frames = True,
+    #                       gaze_centered = True,
+    #                       save_input_images=False,
+    #                       save_output_images=False)
+    #
+    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
+    #
+    # source.create_visualization(algorithm='nvidia2', gaze_centered=True, visualize_as='hsv_overlay',
+    #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
 
-    #a_file_path = gaze-centered_hsv "videos","heading_fixed.mp4")
-    #a_file_path = os.path.join("pupil_labs_data", "GD-Short-Driving-Video")
-    #a_file_path = os.path.join("pupil_labs_data", "cb13")
-    #source = pupil_labs_source(a_file_path) #recording_number='001')
 
-    a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
-    # r"D:\Data\Driving_1\Aware-AI\CM\"
-    source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
+    file_name = "dash_cam.mp4"
+    a_file_path = os.path.join("demo_input_video", file_name)
+    source = video_source(a_file_path)
     source.cuda_enabled = True
 
-    source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=False,
-                          upper_mag_threshold=20,
-                          vector_scalar=0, save_input_images=False, save_output_images=False)
+    source.calculate_flow(algorithm='nvidia2',
+                          preprocess_frames = True,
+                          save_input_images=False,
+                          save_output_images=False)
+
+    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
+
+    source.create_visualization(algorithm='nvidia2', visualize_as='hsv_overlay',upper_mag_threshold=20)
 
 
 
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="gaze-centered_hsv", lower_mag_threshold=0.1,
-    #                       upper_mag_threshold=15,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=False)
-    #
-    #
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=False,
-    #                       upper_mag_threshold=15,
-    #                       vector_scalar=0, save_input_images=False, save_output_images=False)
-
-    #source.avg_flow_magnitude_by_direction(play_video=False,save_video=True)
-    # source.overlay_gaze_on_video('hsv_gaze-overlay')
-
-    # a_file_path = os.path.join("pupil_labs_data", "cb1")
-    # source = pupil_labs_source(a_file_path)
-    # source.cuda_enabled = True
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold=3,
-    #                       upper_mag_threshold=25,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=True)
-
-
-
-    # a_file_path = os.path.join("pupil_labs_data", "cb13")
-    # source = pupil_labs_source(a_file_path)
-    # source.overlay_gaze_on_video('hsv_gaze')
-    
-    # source.calculate_flow(algorithm='nvidia2',
-    #                       visualize_as="hsv_overlay",
-    #                       lower_mag_threshold = 1,
-    #                       upper_mag_threshold = 35,
-    #                       vector_scalar=3, save_input_images=False, save_output_images=False, save_midpoint_images=False)
-
-    #
-
-    # a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
-    # #a_file_path = os.path.join("videos", "640_480_60Hz.mp4")
-    # # a_file_path = os.path.join("pupil_labs_data","GD-Short-Driving-Video","S001","PupilData","007","world.mp4")
-    # source = video_source(a_file_path)
-    # source.cuda_enabled = True
-    # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold = False, upper_mag_threshold=25,
-    #                        vector_scalar=3, save_input_images=False, save_output_images=False)
-
-    #
-    # a_file_path = os.path.join("demo_input_video", "moving_sphere.mp4")
-    # source = video_source(a_file_path)
-    # source.cuda_enabled = True
-    # source.calculate_flow(algorithm='tvl1', visualize_as="vectors", lower_mag_threshold = False, upper_mag_threshold=25,
-    #                        vector_scalar=3, save_input_images=False, save_output_images=False, fps = 30)
