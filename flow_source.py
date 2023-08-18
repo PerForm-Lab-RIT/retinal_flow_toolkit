@@ -405,8 +405,12 @@ class video_source():
 
         plt.savefig(mag_image_fileloc)
 
-    def calculate_magnitude_distribution(self,algorithm, gaze_centered, stride_length = 20):
+    def calculate_magnitude_distribution(self,algorithm, gaze_centered=False, stride_length = 20):
         # Calculates magnitude distribution of flow vectors for every stride_length frame in central 2/3 of video
+
+        if isinstance(self, pupil_labs_source) == False & gaze_centered == True:
+            logger.error('Can\'t perform gaze centered operations for video_sources.  Ignoring request!',stack_info=True, exc_info=True)
+            sys.exit(1)
 
         def append_to_mag_histogram(index, magnitude):
 
@@ -526,6 +530,10 @@ class video_source():
                              lower_mag_threshold = False,
                              upper_mag_threshold = False,
                              ):
+
+        if isinstance(self, pupil_labs_source) == False and gaze_centered == True:
+            logger.error('You can only perform gaze centered operations when using pupil_labs_sources.', stack_info=True, exc_info=True)
+            sys.exit(1)
 
         # Create video out filename
         video_out_filename = []
@@ -1022,7 +1030,8 @@ class pupil_labs_source(video_source):
         gaze_positions_path = os.path.join(self.export_folder, 'gaze_positions.csv')
 
         if os.path.exists(gaze_positions_path) is False:
-            logger.error('No gaze_positions found in the exports folder.')
+            logger.error('No gaze_positions found in the exports folder.', stack_info=True, exc_info=True)
+            sys.exit(1)
 
         # Defaults to the most recent pupil export folder (highest number)
         self.gaze_data = pd.read_csv(gaze_positions_path)
@@ -1109,19 +1118,19 @@ class pupil_labs_source(video_source):
 
 if __name__ == "__main__":
 
-    # a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
-    # source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
-    #
-    # source.calculate_flow(algorithm='nvidia2',
-    #                       preprocess_frames = True,
-    #                       gaze_centered = True,
-    #                       save_input_images=False,
-    #                       save_output_images=False)
-    #
-    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
-    #
-    # source.create_visualization(algorithm='nvidia2', gaze_centered=True, visualize_as='hsv_overlay',
-    #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
+    a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
+    source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
+
+    source.calculate_flow(algorithm='nvidia2',
+                          preprocess_frames = True,
+                          gaze_centered = True,
+                          save_input_images=False,
+                          save_output_images=False)
+
+    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
+
+    source.create_visualization(algorithm='nvidia2', gaze_centered=True, visualize_as='hsv_overlay',
+                                lower_mag_threshold=0.25, upper_mag_threshold=30)
 
 
     file_name = "dash_cam.mp4"
@@ -1136,7 +1145,7 @@ if __name__ == "__main__":
 
     source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
 
-    source.create_visualization(algorithm='nvidia2', visualize_as='hsv_overlay',upper_mag_threshold=20)
+    source.create_visualization(algorithm='nvidia2', gaze_centered = True, visualize_as='hsv_overlay',upper_mag_threshold=20)
 
 
 
