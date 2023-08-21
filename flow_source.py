@@ -212,7 +212,7 @@ class video_source():
                        video_out_name=False,
                        algorithm="nvidia2",
                        gaze_centered=False,
-                       preprocess_frames = False,
+                       preprocess_frames = True,
                        save_input_images=False,
                        save_output_images=False):
 
@@ -269,6 +269,7 @@ class video_source():
                     prev_frame = frame
 
                     if preprocess_frames:
+
                         prev_frame = self.preprocess_frame(prev_frame)
 
                     # Apply histogram normalization.
@@ -298,14 +299,11 @@ class video_source():
                 else:
                     self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
 
-
-
                 flow = self.calculate_flow_for_frame(index,algo_supports_cuda)
 
                 # Save optical flow to HDF5
                 flow_hdf5_dataset.resize((flow_hdf5_dataset.shape[0] + 1, flow.shape[0], flow.shape[1], 2))
                 flow_hdf5_dataset[index] = flow
-
 
                 if self.cuda_enabled:
                     self.previous_gpu = self.current_gpu.clone()
@@ -403,6 +401,8 @@ class video_source():
         ax.set_xlabel('vector length')
         ax.set_ylabel('likelihood')
 
+        print( f'Magnitude saved to {self.magnitude_out_path}')
+
         plt.savefig(mag_image_fileloc)
 
     def calculate_magnitude_distribution(self,algorithm, gaze_centered=False, stride_length = 20):
@@ -436,19 +436,26 @@ class video_source():
 
         row_indices = np.arange(one_third,num_rows-one_third, stride_length)
         count = 0
+
         for frame_idx in tqdm(row_indices, desc="Calculating magnitude distribution.", unit='frames', total=len(row_indices)):
         # for count, frame_idx in enumerate(np.arange(one_third,num_rows-one_third, stride_length)):
 
-            magnitude, angle = cv2.cartToPolar(flow[frame_idx,:,:,0], flow[frame_idx,:,:,1])
+            magnitude, angle = cv2.cartToPolar(flow[frame_idx,:,:,0], flow[frame_idx,:,:,1]);
             append_to_mag_histogram(count, magnitude)
             count = count+1
+
+            plt.close('all')
 
         self.save_out_mag_histogram(algorithm)
 
     def filter_magnitude(self, magnitude, bgr_frame):
 
-        _, mask = cv2.threshold(cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY), 50, 255, cv2.THRESH_TOZERO)
-        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
+        if self.cuda_enabled:
+            _, mask = cv2.cuda.threshold(self.current_gpu, 50, 255, cv2.THRESH_TOZERO)
+            magnitude = cv2.cuda.bitwise_and(magnitude, magnitude, mask=mask.download())
+        else:
+            _, mask = cv2.threshold(self.current_gray, 50, 255, cv2.THRESH_TOZERO)
+            magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
 
         return magnitude
 
@@ -463,6 +470,40 @@ class video_source():
         magnitude = (magnitude / upper_mag_threshold) * 255.0
 
         return magnitude
+
+
+    def convert_flow_to_magnitude_angle(self,flow,
+                                        bgr_world_in,
+                                        lower_mag_threshold = False,
+                                        upper_mag_threshold = False):
+
+        magnitude, angle = cv2.cartToPolar(flow[...,0], flow[...,1])
+
+        # Clips to lower-upper thresh and then rescales into range 0-255
+        magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude,
+                                                                  lower_mag_threshold=lower_mag_threshold,
+                                                                  upper_mag_threshold=upper_mag_threshold)
+
+        # A custom filter.  Mine masks out black patches in the input video.
+        # Due to compression, they can be filled with noise.
+        processed_bgr_world = self.preprocess_frame(bgr_world_in)
+
+        processed_gray_world = cv2.cvtColor(processed_bgr_world, cv2.COLOR_BGR2GRAY)
+
+        _, mask = cv2.threshold(processed_gray_world, 10, 255, cv2.THRESH_TOZERO)
+
+        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
+        angle = cv2.bitwise_and(angle, angle, mask=mask)
+
+        return magnitude, angle
+
+    @staticmethod
+    def filter_magnitude(magnitude, bgr_world):
+
+        processed_bgr_world = source.preprocess_frame(bgr_world)
+        processed_gray_world = cv2.cvtColor(processed_bgr_world, cv2.COLOR_BGR2GRAY)
+        _, mask = cv2.threshold(processed_gray_world, 10, 255, cv2.THRESH_TOZERO)
+        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
 
     @staticmethod
     def preprocess_frame(frame):
@@ -500,6 +541,7 @@ class video_source():
             return bgr_image
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
         frame = cv2.bitwise_and(frame, frame, mask=create_sky_mask_on_hsv(hsv))
         frame = cv2.bitwise_and(frame, frame, mask=create_road_mask_on_hsv(hsv))
 
@@ -898,7 +940,7 @@ class pupil_labs_source(video_source):
     def calculate_flow(self,
                        video_out_name=False,
                        algorithm="nvidia2",
-                       preprocess_frames=False,
+                       preprocess_frames=True,
                        gaze_centered=False,
                        save_input_images=False,
                        save_output_images=False):
@@ -907,12 +949,12 @@ class pupil_labs_source(video_source):
             self.import_gaze_from_exports()
             self.process_gaze_data()
 
-            super().calculate_flow(video_out_name=video_out_name,
-                                   algorithm=algorithm,
-                                   preprocess_frames=preprocess_frames,
-                                   gaze_centered=gaze_centered,
-                                   save_input_images=save_input_images,
-                                   save_output_images=save_output_images)
+        super().calculate_flow(video_out_name=video_out_name,
+                               algorithm=algorithm,
+                               preprocess_frames=preprocess_frames,
+                               gaze_centered=gaze_centered,
+                               save_input_images=save_input_images,
+                               save_output_images=save_output_images)
 
     def modify_frame(self, frame, frame_index):
 
@@ -1123,29 +1165,29 @@ if __name__ == "__main__":
 
     source.calculate_flow(algorithm='nvidia2',
                           preprocess_frames = True,
-                          gaze_centered = True,
+                          gaze_centered = False,
                           save_input_images=False,
                           save_output_images=False)
 
-    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
-
-    source.create_visualization(algorithm='nvidia2', gaze_centered=True, visualize_as='hsv_overlay',
-                                lower_mag_threshold=0.25, upper_mag_threshold=30)
-
-
-    file_name = "dash_cam.mp4"
-    a_file_path = os.path.join("demo_input_video", file_name)
-    source = video_source(a_file_path)
-    source.cuda_enabled = True
-
-    source.calculate_flow(algorithm='nvidia2',
-                          preprocess_frames = True,
-                          save_input_images=False,
-                          save_output_images=False)
-
-    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
-
-    source.create_visualization(algorithm='nvidia2', gaze_centered = True, visualize_as='hsv_overlay',upper_mag_threshold=20)
-
+    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
+    #
+    # source.create_visualization(algorithm='nvidia2', gaze_centered=True, visualize_as='hsv_overlay',
+    #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
+    #
+    #
+    # file_name = "dash_cam.mp4"
+    # a_file_path = os.path.join("demo_input_video", file_name)
+    # source = video_source(a_file_path)
+    # source.cuda_enabled = True
+    #
+    # source.calculate_flow(algorithm='nvidia2',
+    #                       preprocess_frames = True,
+    #                       save_input_images=False,
+    #                       save_output_images=False)
+    #
+    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
+    #
+    # source.create_visualization(algorithm='nvidia2', gaze_centered = True, visualize_as='hsv_overlay',upper_mag_threshold=20)
+    #
 
 
