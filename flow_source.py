@@ -245,8 +245,9 @@ class video_source():
             # hdf5_filepath['video_in'] = num_frames
 
             flow_hdf5_dataset = hdf5_file_out.create_dataset("flow", (1, height, width, 2),
-                                                        maxshape=(None, height, width, 2), dtype='float32',chunks=True,
-                                                        compression="lzf")#, compression_opts=9
+                                                        maxshape=(num_frames, height, width, 2), dtype='f',chunks=True,
+                                                        compression="gzip", compression_opts=4, shuffle=True)
+
 
             flow_hdf5_dataset.attrs['approx_fps'] = fps
             flow_hdf5_dataset.attrs['num_source_frames'] = num_frames
@@ -504,6 +505,7 @@ class video_source():
         processed_gray_world = cv2.cvtColor(processed_bgr_world, cv2.COLOR_BGR2GRAY)
         _, mask = cv2.threshold(processed_gray_world, 10, 255, cv2.THRESH_TOZERO)
         magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
+        return magnitude
 
     @staticmethod
     def preprocess_frame(frame):
@@ -607,35 +609,23 @@ class video_source():
 
         for index in tqdm(range(num_frames), desc="Generating " + video_out_filename, unit='frames', total=num_frames):
 
-            success, frame = video_in.read()
+            success, bgr_world = video_in.read()
 
             if not success:
                 print(f'Frame {index}: video_in.read() unsuccessful')
                 continue
 
             if gaze_centered:
-                frame = self.recenter_frame_on_gaze(frame, index)
+                bgr_world = self.recenter_frame_on_gaze(frame, index)
 
             flow_frame = np.array(flow_ds[index,...])
-            magnitude, angle = cv2.cartToPolar(flow_frame[...,0],flow_frame[...,1])
 
-            # Rescales from lower thresh - upper thresh and into range 0-255
-            magnitude = self.apply_magnitude_thresholds_and_rescale(magnitude,
+            magnitude, angle = self.convert_flow_to_magnitude_angle(flow_frame,bgr_world,
                                                                     lower_mag_threshold=lower_mag_threshold,
                                                                     upper_mag_threshold=upper_mag_threshold)
 
-
-            # A custom filter.  Mine masks out black patches in the input video.
-            # Due to compression, they can be filled with noise.
-            magnitude = self.filter_magnitude(magnitude, frame)
-
-            # flow_frame = cv2.polarToCart(magnitude,angle)
-
-            magnitude = np.array(magnitude, dtype=np.uint8)
-            # angle = np.array(angle, dtype=np.uint8)
-
             image_out = self.visualize_frame(index,
-                                             frame,
+                                             bgr_world,
                                              flow_frame,
                                              magnitude,
                                              angle,
@@ -662,7 +652,7 @@ class video_source():
 
         elif visualize_as == "vectors":
 
-            image_out = self.visualize_flow_as_vectors(current_bgr, magnitude, angle, vector_scalar=vector_scalar)
+            image_out = self.visualize_flow_as_vectors(current_bgr, magnitude, angle)
 
         elif visualize_as == "hsv_overlay" or visualize_as == "hsv_stacked":
 
@@ -1163,18 +1153,17 @@ if __name__ == "__main__":
     a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
     source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
 
-    source.calculate_flow(algorithm='nvidia2',
-                          preprocess_frames = True,
-                          gaze_centered = False,
-                          save_input_images=False,
-                          save_output_images=False)
-
+    # source.calculate_flow(algorithm='nvidia2',
+    #                       preprocess_frames = True,
+    #                       gaze_centered = False,
+    #                       save_input_images=False,
+    #                       save_output_images=False)
+    #
     # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
-    #
-    # source.create_visualization(algorithm='nvidia2', gaze_centered=True, visualize_as='hsv_overlay',
-    #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
-    #
-    #
+
+    source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
+                                lower_mag_threshold=0.25, upper_mag_threshold=30)
+
     # file_name = "dash_cam.mp4"
     # a_file_path = os.path.join("demo_input_video", file_name)
     # source = video_source(a_file_path)
@@ -1184,10 +1173,10 @@ if __name__ == "__main__":
     #                       preprocess_frames = True,
     #                       save_input_images=False,
     #                       save_output_images=False)
-    #
+
     # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
     #
-    # source.create_visualization(algorithm='nvidia2', gaze_centered = True, visualize_as='hsv_overlay',upper_mag_threshold=20)
-    #
+    # source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vectors',upper_mag_threshold=20)
+    # #
 
 
