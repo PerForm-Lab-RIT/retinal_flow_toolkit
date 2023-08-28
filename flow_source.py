@@ -8,6 +8,8 @@ import logging
 import pickle
 from tqdm import tqdm
 
+import tables
+
 import warnings
 import pandas as pd
 import subprocess
@@ -206,6 +208,7 @@ class video_source():
 
         container_out = av.open(os.path.join(self.video_out_path, video_out_name), mode="w", timeout=None)
 
+<<<<<<< Updated upstream
         stream_out = container_out.add_stream("libx264", framerate=average_fps)
         # try:
         #     subprocess.check_output('nvidia-smi')
@@ -255,8 +258,76 @@ class video_source():
             # First frame
             if raw_frame.index == 0:
 
+<<<<<<< Updated upstream
                 prev_frame = raw_frame.to_ndarray(format='bgr24')
                 prev_frame = self.preprocess_frame(prev_frame)
+=======
+        hdf5_filepath = self.get_hdf5_filepath(algorithm,gaze_centered=gaze_centered)
+
+        # with h5py.File(hdf5_filepath, 'w') as hdf5_file_out:
+        with tables.open_file(hdf5_filepath, 'w') as hdf5_file_out:
+
+            # hdf5_filepath['fps'] = fps
+            # hdf5_filepath['num_frames'] = num_frames
+            # hdf5_filepath['video_in'] = num_frames
+
+            # Lower/less compression for faster, larger file sizes
+            filters = tables.Filters(complevel=7, complib='blosc')
+            flow_hdf5_dataset = hdf5_file_out.create_earray(hdf5_file_out.root, 'flow',
+                                                            tables.Float32Atom(),
+                                                            filters=filters,
+                                                            shape=(0, 480, 640, 2),
+                                                            expectedrows=num_frames)
+
+            # flow_hdf5_dataset = hdf5_file_out.create_dataset("flow", (1, height, width, 2),
+            #                                             maxshape=(num_frames, height, width, 2), dtype='f',chunks=True,
+            #                                             compression="gzip", compression_opts=4, shuffle=True)
+
+            flow_hdf5_dataset.attrs['approx_fps'] = fps
+            flow_hdf5_dataset.attrs['num_source_frames'] = num_frames
+            h = int(video_in.get(cv2.CAP_PROP_FOURCC))
+            flow_hdf5_dataset.attrs['source_fourcc'] = h
+            flow_hdf5_dataset.attrs['source_codec'] = chr(h&0xff) + chr((h>>8)&0xff) + chr((h>>16)&0xff) + chr((h>>24)&0xff)
+
+            # ##############################
+            # # Iterate through frames
+            for index in tqdm(range(num_frames), desc="Saving flow to  " + hdf5_filepath, unit='frames', total=num_frames):
+
+                success, frame = video_in.read()
+
+                if not success:
+                    print(f'Frame {index}: video_in.read() unsuccessful')
+                    continue
+
+                if index == 0:
+
+                    prev_frame = frame
+
+                    if preprocess_frames:
+
+                        prev_frame = self.preprocess_frame(prev_frame)
+
+                    # Apply histogram normalization.
+                    if algo_supports_cuda and self.cuda_enabled:
+                        self.previous_gpu.upload(prev_frame)
+                        self.previous_gpu = cv2.cuda.cvtColor(self.previous_gpu, cv2.COLOR_BGR2GRAY)
+
+                    else:
+                        self.previous_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                        # image2_gray = self.clahe.apply(image2_gray)
+
+                    # Write out a blank first frame
+                    image_out = np.zeros([np.shape(frame)[0], np.shape(frame)[1], 3], dtype=np.uint8)
+                    # video_out.write(image_out)
+                    continue
+                else:
+
+                    # If is gaze data, recenter
+                    if gaze_centered:
+                        self.recenter_frame_on_gaze(frame, index)
+
+                    current_bgr_processed = self.preprocess_frame(frame)
+>>>>>>> Stashed changes
 
                 # Apply histogram normalization.
                 if algo_supports_cuda and self.cuda_enabled:
@@ -264,8 +335,20 @@ class video_source():
                     self.previous_gpu = cv2.cuda.cvtColor(self.previous_gpu, cv2.COLOR_BGR2GRAY)
                     # self.previous_gpu = self.clahe.apply(previous_gpu, cv2.cuda_Stream.Null())
                 else:
+<<<<<<< Updated upstream
                     self.previous_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
                     # image2_gray = self.clahe.apply(image2_gray)
+=======
+                    self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
+
+                flow = self.calculate_flow_for_frame(index, algo_supports_cuda)
+                flow_hdf5_dataset.append(np.expand_dims(flow, 0))
+
+                if self.cuda_enabled:
+                    self.previous_gpu = self.current_gpu.clone()
+
+                self.previous_gray = self.current_gray
+>>>>>>> Stashed changes
 
                 # Save input images?
                 if save_input_images:
@@ -277,8 +360,13 @@ class video_source():
                 # Write out a blank first frame
                 image_out = np.zeros([raw_frame.height, raw_frame.width, 3], dtype=np.uint8)
 
+<<<<<<< Updated upstream
                 self.encode_frame(container_out, stream_out, image_out, raw_frame, stream_in)
                 continue
+=======
+            video_in.release()
+            hdf5_file_out.close()
+>>>>>>> Stashed changes
 
             else:
                 current_bgr = raw_frame.to_ndarray(format='bgr24')
@@ -481,10 +569,109 @@ class video_source():
                           lower_mag_threshold=False,
                           vector_scalar=1):
 
+<<<<<<< Updated upstream
         flow, magnitude, angle = self.calculate_flow_for_frame(index,
                                                                algo_supports_cuda,
                                                                lower_mag_threshold=lower_mag_threshold,
                                                                upper_mag_threshold=upper_mag_threshold)
+=======
+        video_in = cv2.VideoCapture(self.file_path)
+
+        width = int(video_in.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+        # If a stacked video viz (e.g., hsv_stacked), double the height
+        if 'stacked' in visualize_as:
+            height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT)) * 2
+        else:
+            height = int(video_in.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        fps = video_in.get(cv2.CAP_PROP_FPS)
+        video_out = cv2.VideoWriter(os.path.join(self.video_out_path, video_out_filename),cv2.VideoWriter_fourcc(*'mp4v'), fps, (width,height))
+
+        return video_in, video_out
+
+    def create_visualization(self,
+                             algorithm: str,
+                             gaze_centered: False,
+                             visualize_as: str,
+                             lower_mag_threshold = False,
+                             upper_mag_threshold = False,
+                             ):
+
+        if isinstance(self, pupil_labs_source) == False and gaze_centered == True:
+            logger.error('You can only perform gaze centered operations when using pupil_labs_sources.', stack_info=True, exc_info=True)
+            sys.exit(1)
+
+        # Create video out filename
+        video_out_filename = []
+
+        lower_thresh_string = 'None' if not lower_mag_threshold else str(lower_mag_threshold)
+        upper_thresh_string = 'None' if not upper_mag_threshold else str(upper_mag_threshold)
+        thresh_string = f'{lower_thresh_string}-{upper_thresh_string}'
+
+        if gaze_centered:
+            path, input_video_filename = os.path.split(self.file_path)
+            input_video_filename = input_video_filename.split('.')[0]
+            video_out_filename = f'{input_video_filename}_gaze_centered_{algorithm}_{thresh_string}.mp4'
+        else:
+            video_out_filename = f'{self.source_file_name}_{algorithm}_{thresh_string}.mp4'
+
+        # create video containers and streams
+        video_in, video_out = self.create_video_objects(algorithm, visualize_as, gaze_centered, video_out_filename)
+
+        hdf5_object = self.open_hdf5_file(algorithm, gaze_centered)
+        flow_ds = hdf5_object.root.data # TODO:  change to flow
+        attrs = flow_ds.attrs
+
+        width = np.shape(flow_ds[2])
+        height = np.shape(flow_ds[1])
+        fps = attrs['approx_fps']
+        num_frames = int(video_in.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        print(np.shape(flow_ds))
+        print(num_frames)
+
+        assert np.shape(flow_ds)[0] == attrs['num_source_frames'],"The number of frames from the source does not equal the number of frames in the hdf5 flow file."
+
+        for index in tqdm(range(num_frames), desc="Generating " + video_out_filename, unit='frames', total=num_frames):
+
+            success, bgr_world = video_in.read()
+
+            if not success:
+                print(f'Frame {index}: video_in.read() unsuccessful')
+                continue
+
+            if gaze_centered:
+                bgr_world = self.recenter_frame_on_gaze(bgr_world, index)
+
+            flow_frame = np.array(flow_ds[index,...])
+
+            magnitude, angle = self.convert_flow_to_magnitude_angle(flow_frame, bgr_world,
+                                                                    lower_mag_threshold=lower_mag_threshold,
+                                                                    upper_mag_threshold=upper_mag_threshold)
+
+            image_out = self.visualize_frame(index,
+                                             bgr_world,
+                                             flow_frame,
+                                             magnitude,
+                                             angle,
+                                             visualize_as)
+
+            # Add packet to video
+            video_out.write(image_out)
+
+        video_out.release()
+        video_in.release()
+
+
+    def visualize_frame(self,
+                        index,
+                        current_bgr,
+                        flow,
+                        magnitude,
+                        angle,
+                        visualize_as):
+>>>>>>> Stashed changes
 
         if visualize_as == "streamlines":
 
@@ -596,6 +783,109 @@ class video_source():
 
 
 
+<<<<<<< Updated upstream
+=======
+        # from pathlib import Path
+        # p = Path(
+        #     #'D:/Github/retinal_flow_toolkit/pupil_labs_data/cb13/S001/PupilData/000/exports/000/cb13_world_nvidia2_hsv_overlay.mp4'
+        #     'D:\Github\retinal_flow_toolkit\demo_input_video\dash_cam.mp4'
+        #     ).as_posix()
+        # p = Path('/Users/gjdpci/Documents/Data/Steering/cb13/S001/PupilData/000/exports/000/cb13_world_nvidia2_hsv_overlay.mp4 ')
+        # self.video_target_path = p.as_posix()
+        # video = cv2.VideoCapture('cb13_world_nvidia2_hsv_overlay.mp4')
+
+        count = 0
+        success = 1
+
+        hist_params = (4 *2, 0, 360)
+        bins = np.linspace(hist_params[1], hist_params[2], hist_params[0] + 1)
+        bin_centers = [(bins[i] + bins[i + 1]) / 2 for i in range(len(bins) - 1)]
+
+        cvals = np.array(bin_centers) / 359 + 0.5
+        cvals[cvals > 1] = cvals[cvals > 1] - 1
+        hsv_map = cm.get_cmap('hsv').reversed()
+        bar_colors = hsv_map(cvals)
+
+        from collections import deque
+        bin_rad_hist = deque(maxlen=30)
+
+        # start_frame = 16200  # right turn, high flow
+        #start_frame = 17800  # lef turn, high flow
+        # start_frame = 15725  # right turn, med flo
+        # start_frame = 30000
+        num_frames = int(video_in.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        if start_frame:
+            video_in.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        else:
+            start_frame= 0
+
+        for index in tqdm(range(num_frames-start_frame), desc="Calculating avg vector magnitude", unit='frames', total=num_frames-start_frame):
+
+            success, image = video_in.read()
+
+            if success:
+                dpi = 100
+                fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), subplot_kw=dict(projection='polar'))
+                canvas = FigureCanvas(fig)
+                ax.margins(0)
+                ax.set_ylim([0, 200])
+                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+                h = hsv_image[..., 0]
+                v = hsv_image[..., 2]
+
+                mag_flat = v.flatten()[v.flatten() > 10]
+                hue_flat = h.flatten()[v.flatten() > 10]
+
+                hue_flat = hue_flat * 2.0
+
+                bin_rad = []
+                for b_idx in range(1, len(bins)):
+                    idx = np.where(np.logical_and(hue_flat >= bins[b_idx - 1], hue_flat <= bins[b_idx]))
+                    bin_rad.append(np.mean(mag_flat[idx]))
+
+                bin_rad = np.nan_to_num(bin_rad)
+                bin_rad_hist.appendleft(bin_rad)
+
+                ax.bar(np.deg2rad(bin_centers), np.mean(bin_rad_hist,axis=0), width=2 * (np.pi / (len(bins))), color=bar_colors);
+
+                canvas.draw()  # draw the canvas, cache the renderer
+                image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
+                combined_image = np.vstack([image, cv2.cvtColor(image_from_plot, cv2.COLOR_RGB2BGR)])
+                plt.close('all')
+
+
+                if save_video:
+                    video_out.write(combined_image)
+
+                if play_video:
+                    cv2.imshow(f'Image', combined_image)
+                    key = cv2.waitKey(25)  # pauses for N ms before fetching next image
+                    if key == 27:  # if ESC is pressed, exit loop
+
+                        if save_video:
+                            video_out.release()
+                            video_in.release()
+
+                        cv2.destroyAllWindows()
+                        return
+
+        cv2.destroyAllWindows()
+        video_out.release()
+        video_in.release()
+
+    def recenter_frame_on_gaze(self, frame, frame_index):
+        logger.error('Gaze centering is only possible with pupil labs data sources',
+                     stack_info=True, exc_info=True)
+        sys.exit(1)
+
+
+
+
+>>>>>>> Stashed changes
 class pupil_labs_source(video_source):
 
     def __init__(self, pupil_labs_parent_folder,
@@ -878,9 +1168,17 @@ if __name__ == "__main__":
 
     #
 
+<<<<<<< Updated upstream
     # a_file_path = os.path.join("demo_input_video", "dash_cam.mp4")
     # #a_file_path = os.path.join("videos", "640_480_60Hz.mp4")
     # # a_file_path = os.path.join("pupil_labs_data","GD-Short-Driving-Video","S001","PupilData","007","world.mp4")
+=======
+    source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
+                                lower_mag_threshold=0.25, upper_mag_threshold=35)
+
+    # file_name = "dash_cam.mp4"
+    # a_file_path = os.path.join("demo_input_video", file_name)
+>>>>>>> Stashed changes
     # source = video_source(a_file_path)
     # source.cuda_enabled = True
     # source.calculate_flow(algorithm='nvidia2', visualize_as="hsv_overlay", lower_mag_threshold = False, upper_mag_threshold=25,
