@@ -7,12 +7,15 @@ import logging
 import pickle
 from tqdm import tqdm
 
+import numcodecs
+
 import warnings
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
-import h5py
+# import h5py
+import zarr
 
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename
@@ -192,9 +195,9 @@ class video_source():
     def get_hdf5_filepath(self, algorithm: str, gaze_centered=False):
 
         if gaze_centered:
-            hdf5_out_name = self.source_file_name + '_' + algorithm + '_gaze-centered_flow.hdf5'
+            hdf5_out_name = self.source_file_name + '_' + algorithm + '_gaze-centered_flow.zarr'
         else:
-            hdf5_out_name = self.source_file_name + '_' + algorithm + '_flow.hdf5'
+            hdf5_out_name = self.source_file_name + '_' + algorithm + '_flow.zarr'
 
         return os.path.join(self.video_out_path,hdf5_out_name)
 
@@ -238,94 +241,108 @@ class video_source():
 
         hdf5_filepath = self.get_hdf5_filepath(algorithm,gaze_centered=gaze_centered)
 
-        with h5py.File(hdf5_filepath, 'w') as hdf5_file_out:
+        # hdf5_file_out = zarr.open(hdf5_filepath, mode='w')
 
-            # hdf5_filepath['fps'] = fps
-            # hdf5_filepath['num_frames'] = num_frames
-            # hdf5_filepath['video_in'] = num_frames
+        # hdf5_file_out = zarr.open(hdf5_filepath, mode='w',
+        #               shape = (num_frames, height, width, 2),
+        #               chunks = (20, height, width, 2),
+        #               dtype = np.float32, compressor = numcodecs.Blosc(cname='zstd', clevel=3))
 
-            flow_hdf5_dataset = hdf5_file_out.create_dataset("flow", (1, height, width, 2),
-                                                        maxshape=(num_frames, height, width, 2), dtype='f',chunks=True,
-                                                        compression="gzip", compression_opts=4, shuffle=True)
+        # root = hdf5_file_out.group()
 
+        zarr_file_out = zarr.group(store = zarr.DirectoryStore(hdf5_filepath), overwrite=True)
+        flow_dataset = zarr_file_out.create_dataset('flow',
+                                             shape=(num_frames, height, width, 2),
+                                             chunks=(1, height, width, 1),
+                                             dtype=np.float32,
+                                             compressor=numcodecs.Blosc(cname='zstd', clevel=3))
 
-            flow_hdf5_dataset.attrs['approx_fps'] = fps
-            flow_hdf5_dataset.attrs['num_source_frames'] = num_frames
-            h = int(video_in.get(cv2.CAP_PROP_FOURCC))
-            flow_hdf5_dataset.attrs['source_fourcc'] = h
-            flow_hdf5_dataset.attrs['source_codec'] = chr(h&0xff) + chr((h>>8)&0xff) + chr((h>>16)&0xff) + chr((h>>24)&0xff)
+        # cname options: ['blosclz', 'lz4', 'lz4hc', 'zlib', 'zstd']
 
-            # ##############################
-            # # Iterate through frames
-            for index in tqdm(range(num_frames), desc="Saving flow to  " + hdf5_filepath, unit='frames', total=num_frames):
+        flow_dataset.attrs['approx_fps'] = fps
+        flow_dataset.attrs['num_source_frames'] = num_frames
+        h = int(video_in.get(cv2.CAP_PROP_FOURCC))
+        flow_dataset.attrs['source_fourcc'] = h
+        flow_dataset.attrs['source_codec'] = chr(h&0xff) + chr((h>>8)&0xff) + chr((h>>16)&0xff) + chr((h>>24)&0xff)
 
-                success, frame = video_in.read()
+        # flow_hdf5_dataset.attrs['approx_fps'] = fps
+        # flow_hdf5_dataset.attrs['num_source_frames'] = num_frames
+        # h = int(video_in.get(cv2.CAP_PROP_FOURCC))
+        # flow_hdf5_dataset.attrs['source_fourcc'] = h
+        # flow_hdf5_dataset.attrs['source_codec'] = chr(h&0xff) + chr((h>>8)&0xff) + chr((h>>16)&0xff) + chr((h>>24)&0xff)
 
-                if not success:
-                    print(f'Frame {index}: video_in.read() unsuccessful')
-                    continue
+        # ##############################
+        # # Iterate through frames
+        for index in tqdm(range(num_frames), desc="Saving flow to  " + hdf5_filepath, unit='frames', total=num_frames):
 
-                if index == 0:
+            success, frame = video_in.read()
 
-                    prev_frame = frame
+            if not success:
+                print(f'Frame {index}: video_in.read() unsuccessful')
+                continue
 
-                    if preprocess_frames:
+            if index == 0:
 
-                        prev_frame = self.preprocess_frame(prev_frame)
+                prev_frame = frame
 
-                    # Apply histogram normalization.
-                    if algo_supports_cuda and self.cuda_enabled:
-                        self.previous_gpu.upload(prev_frame)
-                        self.previous_gpu = cv2.cuda.cvtColor(self.previous_gpu, cv2.COLOR_BGR2GRAY)
-                        # self.previous_gpu = self.clahe.apply(previous_gpu, cv2.cuda_Stream.Null())
-                    else:
-                        self.previous_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-                        # image2_gray = self.clahe.apply(image2_gray)
+                if preprocess_frames:
 
-                    # Write out a blank first frame
-                    image_out = np.zeros([np.shape(frame)[0], np.shape(frame)[1], 3], dtype=np.uint8)
-                    # video_out.write(image_out)
-                    continue
-                else:
+                    prev_frame = self.preprocess_frame(prev_frame)
 
-                    # If is gaze data, recenter
-                    if gaze_centered:
-                        self.recenter_frame_on_gaze(frame, index)
-
-                    current_bgr_processed = self.preprocess_frame(frame)
-
+                # Apply histogram normalization.
                 if algo_supports_cuda and self.cuda_enabled:
-                    self.current_gpu.upload(current_bgr_processed)
-                    self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
+                    self.previous_gpu.upload(prev_frame)
+                    self.previous_gpu = cv2.cuda.cvtColor(self.previous_gpu, cv2.COLOR_BGR2GRAY)
+                    # self.previous_gpu = self.clahe.apply(previous_gpu, cv2.cuda_Stream.Null())
                 else:
-                    self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
+                    self.previous_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+                    # image2_gray = self.clahe.apply(image2_gray)
 
-                flow = self.calculate_flow_for_frame(index,algo_supports_cuda)
+                # Write out a blank first frame
+                image_out = np.zeros([np.shape(frame)[0], np.shape(frame)[1], 3], dtype=np.uint8)
+                # video_out.write(image_out)
+                continue
+            else:
 
-                # Save optical flow to HDF5
-                flow_hdf5_dataset.resize((flow_hdf5_dataset.shape[0] + 1, flow.shape[0], flow.shape[1], 2))
-                flow_hdf5_dataset[index] = flow
+                # If is gaze data, recenter
+                if gaze_centered:
+                    self.recenter_frame_on_gaze(frame, index)
 
-                if self.cuda_enabled:
-                    self.previous_gpu = self.current_gpu.clone()
+                current_bgr_processed = self.preprocess_frame(frame)
 
-                self.previous_gray = self.current_gray
+            if algo_supports_cuda and self.cuda_enabled:
+                self.current_gpu.upload(current_bgr_processed)
+                self.current_gpu = cv2.cuda.cvtColor(self.current_gpu, cv2.COLOR_BGR2GRAY)
+            else:
+                self.current_gray = cv2.cvtColor(current_bgr_processed, cv2.COLOR_BGR2GRAY)
 
-                # Save input images?
-                if save_input_images:
-                    if os.path.isdir(self.raw_frames_out_path) is False:
-                        os.makedirs(self.raw_frames_out_path)
-                    cv2.imwrite(str(os.path.join(self.raw_frames_out_path, 'frame-{}.png'.format(index))),
-                                current_bgr_processed)
+            flow = self.calculate_flow_for_frame(index,algo_supports_cuda)
 
-                # Save output images?
-                if save_output_images:
-                    if os.path.isdir(self.flow_frames_out_path) is False:
-                        os.makedirs(self.flow_frames_out_path)
-                    cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(index))),
-                                image_out)
+            # Save optical flow to HDF5
+            # flow_hdf5_dataset.resize((flow_hdf5_dataset.shape[0] + 1, flow.shape[0], flow.shape[1], 2))
+            flow_dataset[index,...] = flow
 
-            video_in.release()
+            if self.cuda_enabled:
+                self.previous_gpu = self.current_gpu.clone()
+
+            self.previous_gray = self.current_gray
+
+            # Save input images?
+            if save_input_images:
+                if os.path.isdir(self.raw_frames_out_path) is False:
+                    os.makedirs(self.raw_frames_out_path)
+                cv2.imwrite(str(os.path.join(self.raw_frames_out_path, 'frame-{}.png'.format(index))),
+                            current_bgr_processed)
+
+            # Save output images?
+            if save_output_images:
+                if os.path.isdir(self.flow_frames_out_path) is False:
+                    os.makedirs(self.flow_frames_out_path)
+                cv2.imwrite(str(os.path.join(self.flow_frames_out_path, 'frame-{}.png'.format(index))),
+                            image_out)
+
+        video_in.release()
+        hdf5_file_out.flush()
 
     def calculate_flow_for_frame(self, index, algo_supports_cuda):
 
@@ -1159,10 +1176,10 @@ if __name__ == "__main__":
                           save_input_images=False,
                           save_output_images=False)
 
-    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
-
-    source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
-                                lower_mag_threshold=0.25, upper_mag_threshold=30)
+    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
+    #
+    # source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
+    #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
 
     # file_name = "dash_cam.mp4"
     # a_file_path = os.path.join("demo_input_video", file_name)
