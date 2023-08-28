@@ -1153,13 +1153,13 @@ if __name__ == "__main__":
     a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
     source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
 
-    # source.calculate_flow(algorithm='nvidia2',
-    #                       preprocess_frames = True,
-    #                       gaze_centered = False,
-    #                       save_input_images=False,
-    #                       save_output_images=False)
-    #
-    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
+    source.calculate_flow(algorithm='nvidia2',
+                          preprocess_frames = True,
+                          gaze_centered = False,
+                          save_input_images=False,
+                          save_output_images=False)
+
+    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
 
     source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
                                 lower_mag_threshold=0.25, upper_mag_threshold=30)
