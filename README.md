@@ -78,6 +78,35 @@ Dependencies include...
 
 ![image](https://user-images.githubusercontent.com/8962011/212423219-734e351a-0139-4596-ac8b-8d5bc28c7316.png)
 
+-------------------
+Some notes on installing OpenCV with CUDA:
 
+* This is my fav guide: https://jordanbenge.medium.com/anaconda3-opencv-with-cuda-gpu-support-for-windows-10-e038569e228
 
+* When downloading opencv and opencv contribs, make sure you get the latest source code realease. 
+
+* Depending on how you installed anaconda, your environments will be found in either 
+     - C:\Users\<username>\anaconda3\envs
+     - or C:\Users\<username>\.conda\envs  (.conda is a hidden folder.  If you can't see it, google how to show hidden folders in windows explorer)
+
+* If installing to a new env, make sure numpy is installed
+
+* all \ in the *.bat files have to changed to /
+
+* When calling the bat files, you have to first activate your target conda environment
+
+* I had to include the CMAKE build argument  -DBUILD_SHARED_LIBS=OFF . 
+
+* In the configure_and_build_opencv.bat, you must update DCUDA_ARCH_BIN based on your card's cuda architecture (https://en.wikipedia.org/wiki/CUDA)
+
+* It looks like cuda and cudnn can both be installed using anaconda's gui.  I haven't tried this yet.  If it works, it would save a lot of time, because installing them is a pain 🙂
+
+* If you need to, here's how to install Cuda and CUDANN : https://medium.com/geekculture/install-cuda-and-cudnn-on-windows-linux-52d1501a8805  .
+
+* Note that CUDANN does not yet work for the newest version of Cuda, version 12, but does work for version 11.  Here is a link where you can download Cuda 11. https://developer.nvidia.com/cuda-11-8-0-download-archive?target_os=Windows&target_arch=x86_64&target_version=10
+
+* Install requires that you have installed visual studio using certain settings that enable cmake support.  If you aren't sure that you did that, here's how to modify Visual STudio to connect to Cmake without uninstalling/reinstalling. https://learn.microsoft.com/en-us/cpp/linux/download-install-and-setup-the-linux-development-workload?view=msvc-170 
+
+* If after installing properly, you may still get a dependency error when attempting to load the cuda module.  Some wonderful person on the OpenCV forums helped me to resolve this issue.  Not ideal, but it requires manually adding those dependencies to the path in the python files.  Here's the link! 
+https://github.com/cudawarped/opencv-experiments/blob/master/nbs/ImportError_dll_load_failed_while_importing_cv2.ipynb
 
