@@ -5,7 +5,7 @@ A simple module for the calculation of optic flow.
 
 The most relevant file is video_source.py, in which lives the video_source class for converting a video into optic flow.  You also have the option of saving out intermediate frames of image data.
 
-It will take advantage of CUDA if enabled for opencv. 
+It will take advantage of CUDA if enabled for opencv.  I have included instructions on how to get that going at hte bottom of this readme.
 
 To run, create a video_source object from an input movie file, and then calculate_flow()
 
@@ -18,6 +18,7 @@ source.calculate_flow(algorithm='tvl1', visualize_as="hsv_stacked", lower_mag_th
 ```
 
 If you don't have cuda enabled for opencv, set <video_source>.cuda_enabled = False
+It will work, but it will be very slow (like 10x slower).
 
 ## Flow algorithms and settings.
 
