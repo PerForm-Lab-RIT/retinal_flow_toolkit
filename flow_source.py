@@ -625,6 +625,10 @@ class video_source():
 
         assert np.shape(flow_ds)[0] == attrs['num_source_frames'],"The number of frames from the source does not equal the number of frames in the hdf5 flow file."
 
+        buffer_len = 10
+        from collections import deque
+        flow_buffer = deque([], maxlen=buffer_len)
+
         for index in tqdm(range(num_frames), desc="Generating " + video_out_filename, unit='frames', total=num_frames):
 
             success, bgr_world = video_in.read()
@@ -634,9 +638,14 @@ class video_source():
                 continue
 
             if gaze_centered:
-                bgr_world = self.recenter_frame_on_gaze(frame, index)
+                bgr_world = self.recenter_frame_on_gaze(bgr_world, index)
 
             flow_frame = np.array(flow_ds[index,...])
+            flow_buffer.appendleft(flow_frame)
+
+            if visualize_as == "vector_buffer":
+                flow_frame = np.sum(flow_buffer, axis=0)
+                flow_frame = cv2.blur(flow_frame, [7, 7])
 
             magnitude, angle = self.convert_flow_to_magnitude_angle(flow_frame,bgr_world,
                                                                     lower_mag_threshold=lower_mag_threshold,
@@ -668,7 +677,7 @@ class video_source():
 
             image_out = self.visualize_flow_as_streamlines(current_bgr, flow)
 
-        elif visualize_as == "vectors":
+        elif visualize_as == "vectors" or visualize_as == "vector_buffer":
 
             image_out = self.visualize_flow_as_vectors(current_bgr, magnitude, angle)
 
@@ -742,8 +751,8 @@ class video_source():
 
         return bgr
 
-    def visualize_flow_as_vectors(self, image_in, magnitude, angle, skippts=10, scale=1, scale_units='width',
-                            width=.004, return_image=True):
+    def visualize_flow_as_vectors(self, image_in, magnitude, angle, skippts=15, scale=.1,scale_units='width',
+                            width=.003, return_image=True):
 
         dpi = 100
         fig, ax = plt.subplots()
@@ -784,9 +793,8 @@ class video_source():
 
         plt.close('all')
 
-        return image_from_plot
+        return cv2.cvtColor(image_from_plot,cv2.COLOR_BGR2RGB)
 
-        #return cv2.cvtColor(image_from_plot, cv2.COLOR_BGR2RGB)
 
     def set_video_target(self, initial_dir=False, file_path=False):
 
@@ -1214,7 +1222,7 @@ if __name__ == "__main__":
 
     #source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = False)
     #
-    source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vectors',upper_mag_threshold=20)
+    source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vector_buffer',upper_mag_threshold=20)
     # #
 
 
