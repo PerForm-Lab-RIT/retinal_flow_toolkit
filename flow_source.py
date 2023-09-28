@@ -343,7 +343,6 @@ class video_source():
                             image_out)
 
         video_in.release()
-        hdf5_file_out.flush()
 
     def calculate_flow_for_frame(self, index, algo_supports_cuda):
 
@@ -1181,33 +1180,33 @@ class pupil_labs_source(video_source):
 
 if __name__ == "__main__":
 
-    a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM_reduced")
-    source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
-
-    source.calculate_flow(algorithm='nvidia2',
-                          preprocess_frames = True,
-                          gaze_centered = False,
-                          save_input_images=False,
-                          save_output_images=False)
-
-    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = False)
-
-    source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
-                                lower_mag_threshold=0.25, upper_mag_threshold=30)
-
-    # file_name = "dash_cam.mp4"
-    # a_file_path = os.path.join("demo_input_video", file_name)
-    # source = video_source(a_file_path)
-    # source.cuda_enabled = True
+    # a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM_reduced")
+    # source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
     #
     # source.calculate_flow(algorithm='nvidia2',
-    #                       preprocess_frames = True,
+    #                       preprocess_frames=True,
+    #                       gaze_centered=False,
     #                       save_input_images=False,
     #                       save_output_images=False)
     #
     # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = False)
     #
-    # source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vector_buffer',upper_mag_threshold=20)
+    # source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
+    #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
+
+    file_name = "dash_cam.mp4"
+    a_file_path = os.path.join("demo_input_video", file_name)
+    source = video_source(a_file_path)
+    source.cuda_enabled = True
+
+    source.calculate_flow(algorithm='nvidia2',
+                          preprocess_frames=True,
+                          save_input_images=False,
+                          save_output_images=False)
+
+    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = False)
+
+    source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vector_buffer',upper_mag_threshold=20)
 
 
 
