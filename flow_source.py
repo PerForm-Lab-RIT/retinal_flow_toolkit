@@ -467,18 +467,12 @@ class video_source():
 
         self.save_out_mag_histogram(algorithm)
 
-    def filter_magnitude(self, magnitude, bgr_frame):
-
-        if self.cuda_enabled:
-            _, mask = cv2.cuda.threshold(self.current_gpu, 50, 255, cv2.THRESH_TOZERO)
-            magnitude = cv2.cuda.bitwise_and(magnitude, magnitude, mask=mask.download())
-        else:
-            _, mask = cv2.threshold(self.current_gray, 50, 255, cv2.THRESH_TOZERO)
-            magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
-
-        return magnitude
-
     def apply_magnitude_thresholds_and_rescale(self, magnitude, lower_mag_threshold=False, upper_mag_threshold=False):
+
+        '''
+        This method first clips the flow magnitude to the range lower_mag_threshold - upper_mag_threshold.
+        It then rescales from the range min-max into 0-255.
+        '''
 
         if lower_mag_threshold:
             magnitude[magnitude < lower_mag_threshold] = 0
@@ -489,7 +483,6 @@ class video_source():
         magnitude = (magnitude / upper_mag_threshold) * 255.0
 
         return magnitude
-
 
     def convert_flow_to_magnitude_angle(self,flow,
                                         bgr_world_in,
@@ -516,14 +509,6 @@ class video_source():
 
         return magnitude, angle
 
-    @staticmethod
-    def filter_magnitude(magnitude, bgr_world):
-
-        processed_bgr_world = source.preprocess_frame(bgr_world)
-        processed_gray_world = cv2.cvtColor(processed_bgr_world, cv2.COLOR_BGR2GRAY)
-        _, mask = cv2.threshold(processed_gray_world, 10, 255, cv2.THRESH_TOZERO)
-        magnitude = cv2.bitwise_and(magnitude, magnitude, mask=mask)
-        return magnitude
 
     @staticmethod
     def preprocess_frame(frame):
@@ -1196,33 +1181,34 @@ class pupil_labs_source(video_source):
 
 if __name__ == "__main__":
 
-    # a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
-    # source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
+    a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM_reduced")
+    source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
 
+    source.calculate_flow(algorithm='nvidia2',
+                          preprocess_frames = True,
+                          gaze_centered = False,
+                          save_input_images=False,
+                          save_output_images=False)
+
+    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = False)
+
+    source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
+                                lower_mag_threshold=0.25, upper_mag_threshold=30)
+
+    # file_name = "dash_cam.mp4"
+    # a_file_path = os.path.join("demo_input_video", file_name)
+    # source = video_source(a_file_path)
+    # source.cuda_enabled = True
+    #
     # source.calculate_flow(algorithm='nvidia2',
     #                       preprocess_frames = True,
-    #                       gaze_centered = False,
     #                       save_input_images=False,
     #                       save_output_images=False)
-
+    #
     # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = False)
-
-    # source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
-    #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
-
-    file_name = "dash_cam.mp4"
-    a_file_path = os.path.join("demo_input_video", file_name)
-    source = video_source(a_file_path)
-    source.cuda_enabled = True
     #
-    # source.calculate_flow(algorithm='nvidia2',
-    #                       preprocess_frames = True,
-    #                       save_input_images=False,
-    #                       save_output_images=False)
+    # source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vector_buffer',upper_mag_threshold=20)
 
-    #source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = False)
-    #
-    source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vector_buffer',upper_mag_threshold=20)
-    # #
+
 
 
