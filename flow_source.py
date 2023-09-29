@@ -1215,10 +1215,10 @@ if __name__ == "__main__":
     source = video_source(a_file_path)
     source.cuda_enabled = True
 
-    # source.calculate_flow(algorithm='nvidia2',
-    #                       preprocess_frames = True,
-    #                       save_input_images=False,
-    #                       save_output_images=False)
+    source.calculate_flow(algorithm='nvidia2',
+                          preprocess_frames = True,
+                          save_input_images=False,
+                          save_output_images=False)
 
     source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered=False)
 
