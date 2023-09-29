@@ -200,8 +200,9 @@ class video_source():
 
     def open_hdf5_file(self, algorithm: str, gaze_centered):
 
+        print( self.get_hdf5_filepath(algorithm, gaze_centered) )
         if not os.path.exists(self.get_hdf5_filepath(algorithm, gaze_centered)):
-            logger.error('HDF5 flow file not found.  Try calculating optic flow with that algorithm first.', stack_info=True, exc_info=True)
+            logger.error('HDF5 flow file not found.  Try calculating optic flow with that algorithm first, and double-check that the gaze-centered flag is set appropriately.', stack_info=True, exc_info=True)
 
             sys.exit(1)
 
@@ -724,31 +725,76 @@ class video_source():
 
         return bgr
 
-    def visualize_flow_as_vectors(self, frame, magnitude, angle, divisor=15):
+    def visualize_flow_as_vectors(self, image_in, magnitude, angle, skippts=15, scale=.1,scale_units='width',
+                            width=.003, return_image=True):
 
-        '''Display image with a visualisation of a flow over the top.
-        A divisor controls the density of the quiver plot.'''
+        dpi = 100
+        fig, ax = plt.subplots()
 
-        # create a blank mask, on which lines will be drawn.
-        mask = np.zeros([np.shape(magnitude)[0], np.shape(magnitude)[1], 3], np.uint8)
+        canvas = FigureCanvas(fig)
+        ax.margins(0)
 
-        # if vector_scalar != 1 & vector_scalar != False:
-        #     magnitude = np.multiply(magnitude, vector_scalar)
+        s = slice(None, None, skippts)
 
-        vector_x, vector_y = cv2.polarToCart(magnitude, angle)
+        xmax = np.shape(image_in)[1]
+        xpoints = int(np.shape(image_in)[1])
+        x = np.linspace(0, np.shape(image_in)[1], xmax)
 
-        for r in range(1, int(np.shape(magnitude)[0] / divisor)):
-            for c in range(1, int(np.shape(magnitude)[1] / divisor)):
-                origin_x = c * divisor
-                origin_y = r * divisor
+        ymax = np.shape(image_in)[0]
+        ypoints = int(np.shape(image_in)[0])
+        y = np.linspace(0, np.shape(image_in)[0], ymax)
 
-                endpoint_x = int(origin_x + vector_x[origin_y, origin_x])
-                endpoint_y = int(origin_y + vector_y[origin_y, origin_x])
+        x = x[s]
+        y = y[s]
+        x2d, y2d = np.meshgrid(x, y, indexing='xy')
 
-                mask = cv2.arrowedLine(mask, (origin_x, origin_y), (endpoint_x, endpoint_y), color=(0, 0, 255),
-                                       thickness=3, tipLength=0.35)
+        u = magnitude * np.cos(angle) * -1
+        v = magnitude * np.sin(angle)
 
-        return cv2.addWeighted(frame, 0.5, mask, 0.5, 0)
+        u = (u[s, s] / 255) * scale
+        v = (v[s, s] / 255) * scale
+
+        plt.imshow(cv2.cvtColor(image_in, cv2.COLOR_BGR2RGB))
+        ax.axis('off')
+
+        plt.quiver(x2d, y2d, u, v, color='white', alpha=0.7, width=width, scale=scale,
+                   scale_units='inches')
+
+        #if return_image:
+        canvas.draw()  # draw the canvas, cache the renderer
+        image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        image_from_plot = image_from_plot.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
+        plt.close('all')
+
+        return cv2.cvtColor(image_from_plot,cv2.COLOR_BGR2RGB)
+
+
+    # def visualize_flow_as_vectors(self, frame, magnitude, angle, divisor=15):
+    #
+    #     '''Display image with a visualisation of a flow over the top.
+    #     A divisor controls the density of the quiver plot.'''
+    #
+    #     # create a blank mask, on which lines will be drawn.
+    #     mask = np.zeros([np.shape(magnitude)[0], np.shape(magnitude)[1], 3], np.uint8)
+    #
+    #     # if vector_scalar != 1 & vector_scalar != False:
+    #     #     magnitude = np.multiply(magnitude, vector_scalar)
+    #
+    #     vector_x, vector_y = cv2.polarToCart(magnitude, angle)
+    #
+    #     for r in range(1, int(np.shape(magnitude)[0] / divisor)):
+    #         for c in range(1, int(np.shape(magnitude)[1] / divisor)):
+    #             origin_x = c * divisor
+    #             origin_y = r * divisor
+    #
+    #             endpoint_x = int(origin_x + vector_x[origin_y, origin_x])
+    #             endpoint_y = int(origin_y + vector_y[origin_y, origin_x])
+    #
+    #             mask = cv2.arrowedLine(mask, (origin_x, origin_y), (endpoint_x, endpoint_y), color=(0, 0, 255),
+    #                                    thickness=3, tipLength=0.35)
+    #
+    #     return cv2.addWeighted(frame, 0.5, mask, 0.5, 0)
 
     def set_video_target(self, initial_dir=False, file_path=False):
 
@@ -1150,33 +1196,30 @@ class pupil_labs_source(video_source):
 
 if __name__ == "__main__":
 
-    a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
-    source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
-
-    source.calculate_flow(algorithm='nvidia2',
-                          preprocess_frames = True,
-                          gaze_centered = False,
-                          save_input_images=False,
-                          save_output_images=False)
-
-    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
-
-    source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
-                                lower_mag_threshold=0.25, upper_mag_threshold=30)
-
-    # file_name = "dash_cam.mp4"
-    # a_file_path = os.path.join("demo_input_video", file_name)
-    # source = video_source(a_file_path)
-    # source.cuda_enabled = True
+    # a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
+    # source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
     #
+    # source.calculate_flow(algorithm='nvidia2',
+    #                       preprocess_frames = True,
+    #                       gaze_centered = False,
+    #                       save_input_images=False,
+    #                       save_output_images=False)
+    #
+    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
+    #
+    # source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
+    #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
+
+    file_name = "dash_cam.mp4"
+    a_file_path = os.path.join("demo_input_video", file_name)
+    source = video_source(a_file_path)
+    source.cuda_enabled = True
+
     # source.calculate_flow(algorithm='nvidia2',
     #                       preprocess_frames = True,
     #                       save_input_images=False,
     #                       save_output_images=False)
 
-    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = True)
-    #
-    # source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vectors',upper_mag_threshold=20)
-    # #
+    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered=False)
 
-
+    source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vectors',upper_mag_threshold=20)
