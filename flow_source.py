@@ -617,7 +617,7 @@ class video_source():
                 continue
 
             if gaze_centered:
-                bgr_world = self.recenter_frame_on_gaze(frame, index)
+                bgr_world = self.recenter_frame_on_gaze(bgr_world, index)
 
             flow_frame = np.array(flow_ds[index,...])
 
@@ -1195,6 +1195,22 @@ class pupil_labs_source(video_source):
     #     video_in.release()
 
 if __name__ == "__main__":
+    # D:\Data\Driving_1\Spring_2023_pilot\cb\cb13\S001\PupilData\000
+    a_file_path = os.path.join("D:\\", "Data", "Driving_1", "Spring_2023_pilot", "cb","cb13")
+    source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
+
+    # source.calculate_flow(algorithm='nvidia2',
+    #                       preprocess_frames = True,
+    #                       gaze_centered = False,
+    #                       save_input_images=False,
+    #                       save_output_images=False)
+
+    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered = False)
+
+    source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
+                                lower_mag_threshold=0.25, upper_mag_threshold=30)
+
+
 
     # a_file_path = os.path.join("D:\\", "Data", "Driving_1","Aware-AI","CM")
     # source = pupil_labs_source(a_file_path,session_number='S001',recording_number='000')
@@ -1210,16 +1226,16 @@ if __name__ == "__main__":
     # source.create_visualization(algorithm='nvidia2', gaze_centered=False, visualize_as='vectors',
     #                             lower_mag_threshold=0.25, upper_mag_threshold=30)
 
-    file_name = "dash_cam.mp4"
-    a_file_path = os.path.join("demo_input_video", file_name)
-    source = video_source(a_file_path)
-    source.cuda_enabled = True
-
-    source.calculate_flow(algorithm='nvidia2',
-                          preprocess_frames = True,
-                          save_input_images=False,
-                          save_output_images=False)
-
-    source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered=False)
-
-    source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vectors',upper_mag_threshold=20)
+    # file_name = "dash_cam.mp4"
+    # a_file_path = os.path.join("demo_input_video", file_name)
+    # source = video_source(a_file_path)
+    # source.cuda_enabled = True
+    #
+    # source.calculate_flow(algorithm='nvidia2',
+    #                       preprocess_frames = True,
+    #                       save_input_images=False,
+    #                       save_output_images=False)
+    #
+    # source.calculate_magnitude_distribution(algorithm='nvidia2',gaze_centered=False)
+    #
+    # source.create_visualization(algorithm='nvidia2', gaze_centered = False, visualize_as='vectors',upper_mag_threshold=20)
